@@ -103,6 +103,22 @@ def get_candles(coin: str, interval: str = "1h", hours: float = 24) -> list[dict
     return hl.candles(coin, interval=interval, hours=hours)
 
 
+@mcp.tool()
+def get_spot_markets(coins: list[str] | None = None) -> list[dict]:
+    """List spot markets (pair name, base/quote token, mid price). Filter by base coin or pair."""
+    rows = hl.spot_markets()
+    if coins:
+        wanted = {c.upper() for c in coins}
+        rows = [r for r in rows if (r["name"] or "").upper() in wanted or (r["base"] or "").upper() in wanted]
+    return rows
+
+
+@mcp.tool()
+def get_spot_balances(address: str) -> dict:
+    """Spot token balances for any address (public data; no key needed)."""
+    return hl.spot_balances(address)
+
+
 def main() -> None:
     mcp.run()
 

@@ -4,13 +4,17 @@
     hl-read mids BTC ETH             # just these
     hl-read book ETH --depth 5       # order book snapshot
     hl-read positions 0xABC...       # anyone's positions (public)
+    hl-read positions 0xABC... --watch   # live, re-polled every few seconds
     hl-read orders 0xABC...          # resting orders
     hl-read fills 0xABC... --limit 20
     hl-read funding                  # funding / OI table, sorted by |funding|
     hl-read markets                  # every perp + max leverage
+    hl-read spot                     # every spot pair + mid price
+    hl-read balances 0xABC...        # spot token balances
     hl-read watch ETH                # live order book over websocket
 
-Global flags: --testnet (use the testnet API), --json (raw JSON output).
+Global flags: --testnet (testnet API), --json (raw JSON), --retries N,
+--rate-limit N (max HTTP calls/min), --no-cache (always fetch fresh).
 No private key is ever read or accepted.
 """
 from __future__ import annotations
@@ -95,10 +99,7 @@ def _render_book(b: dict) -> None:
         print(f"  {GREEN}{lv['px']:>14,.6g}   {lv['sz']:>12}{RESET}")
 
 
-def cmd_positions(hl: HLRead, args) -> None:
-    p = hl.positions(args.address)
-    if args.json:
-        return _emit(p, True)
+def _render_positions(p: dict) -> None:
     av = p["account_value"]
     print(f"  address       : {p['address']}")
     print(f"  account value : {('n/a' if av is None else f'{av:,.2f}')} USDC")
@@ -106,16 +107,68 @@ def cmd_positions(hl: HLRead, args) -> None:
     if not p["positions"]:
         print("  positions     : none")
         return
+    upnl = sum(pos["unrealized_pnl"] or 0 for pos in p["positions"])
+    ucol = GREEN if upnl >= 0 else RED
+    print(f"  open uPnL     : {ucol}{upnl:,.2f}{RESET} USDC   ({len(p['positions'])} positions)")
     print("  positions:")
     print(f"    {'coin':<7}{'size':>14}{'entry':>14}{'uPnL':>14}{'liq':>14}")
     for pos in p["positions"]:
         col = GREEN if (pos["unrealized_pnl"] or 0) >= 0 else RED
         print(
-            f"    {pos['coin']:<7}{pos['size']:>14,.6g}"
+            f"    {pos['coin']:<7}{(pos['size'] or 0):>14,.6g}"
             f"{(pos['entry_px'] or 0):>14,.6g}"
             f"{col}{(pos['unrealized_pnl'] or 0):>14,.2f}{RESET}"
             f"{(pos['liquidation_px'] or 0):>14,.6g}"
         )
+
+
+def cmd_positions(hl: HLRead, args) -> None:
+    if args.json:
+        return _emit(hl.positions(args.address), True)
+    if not getattr(args, "watch", False):
+        _render_positions(hl.positions(args.address))
+        return
+    net = "testnet" if hl.testnet else "mainnet"
+    interval = max(0.5, args.interval)
+    try:
+        while True:
+            p = hl.positions(args.address)
+            _clear()
+            print(f"  {BOLD}positions{RESET}   {net}   (updated {time.strftime('%H:%M:%S')}, every {interval:g}s)")
+            print("  " + "-" * 60)
+            _render_positions(p)
+            sys.stdout.flush()
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        pass
+
+
+def cmd_balances(hl: HLRead, args) -> None:
+    b = hl.spot_balances(args.address)
+    if args.json:
+        return _emit(b, True)
+    print(f"  address : {b['address']}")
+    if not b["balances"]:
+        print("  balances: none")
+        return
+    print(f"    {'coin':<10}{'total':>18}{'hold':>18}")
+    for bal in b["balances"]:
+        print(f"    {(bal['coin'] or ''):<10}{(bal['total'] or 0):>18,.6g}{(bal['hold'] or 0):>18,.6g}")
+
+
+def cmd_spot(hl: HLRead, args) -> None:
+    rows = hl.spot_markets()
+    if args.coins:
+        wanted = {c.upper() for c in args.coins}
+        rows = [r for r in rows if (r["name"] or "").upper() in wanted or (r["base"] or "").upper() in wanted]
+    if args.json:
+        return _emit(rows, True)
+    rows = [r for r in rows if r["mid"] is not None] or rows
+    print(f"  {len(rows)} spot markets")
+    print(f"    {'pair':<14}{'base':<10}{'quote':<8}{'mid':>16}")
+    for r in rows:
+        mid = "n/a" if r["mid"] is None else f"{r['mid']:,.6g}"
+        print(f"    {(r['name'] or ''):<14}{(r['base'] or ''):<10}{(r['quote'] or ''):<8}{mid:>16}")
 
 
 def cmd_orders(hl: HLRead, args) -> None:
@@ -220,6 +273,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"hl-read {__version__}")
     p.add_argument("--testnet", action="store_true", help="use the testnet API")
     p.add_argument("--json", action="store_true", help="emit raw JSON")
+    p.add_argument("--retries", type=int, default=4, help="retry attempts on transient errors")
+    p.add_argument("--rate-limit", type=float, default=None, dest="rate_limit",
+                   help="cap HTTP calls to at most N per minute")
+    p.add_argument("--no-cache", action="store_true", dest="no_cache",
+                   help="always fetch fresh (disable the short market-data cache)")
     sub = p.add_subparsers(dest="command", required=True)
 
     sp = sub.add_parser("mids", help="mid prices")
@@ -233,7 +291,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("positions", help="positions for an address")
     sp.add_argument("address")
+    sp.add_argument("--watch", action="store_true", help="live: re-poll and redraw")
+    sp.add_argument("--interval", type=float, default=3.0, help="poll seconds when --watch")
     sp.set_defaults(func=cmd_positions)
+
+    sp = sub.add_parser("balances", help="spot token balances for an address")
+    sp.add_argument("address")
+    sp.set_defaults(func=cmd_balances)
 
     sp = sub.add_parser("orders", help="open orders for an address")
     sp.add_argument("address")
@@ -252,6 +316,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("markets", help="list perp markets")
     sp.set_defaults(func=cmd_markets)
 
+    sp = sub.add_parser("spot", help="list spot markets + mid prices")
+    sp.add_argument("coins", nargs="*", help="optional pairs/base coins to filter")
+    sp.set_defaults(func=cmd_spot)
+
     sp = sub.add_parser("watch", help="live order book (websocket)")
     sp.add_argument("coin")
     sp.add_argument("--depth", type=int, default=10)
@@ -262,7 +330,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    hl = HLRead(testnet=args.testnet)
+    hl = HLRead(
+        testnet=args.testnet,
+        max_retries=args.retries,
+        rate_limit_per_min=args.rate_limit,
+        cache_ttl=0.0 if args.no_cache else 1.0,
+        meta_ttl=0.0 if args.no_cache else 300.0,
+    )
     try:
         args.func(hl, args)
     except KeyboardInterrupt:

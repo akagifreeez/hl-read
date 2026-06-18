@@ -23,13 +23,17 @@ hl-read mids BTC ETH               # just these
 hl-read book ETH --depth 5         # order book snapshot
 hl-read funding --top 10           # markets with the most extreme funding
 hl-read markets                    # every perp + max leverage
+hl-read spot                       # every spot pair + mid price
+hl-read spot PURR                  # filter by base coin / pair
 hl-read positions 0xYourAddr...    # anyone's positions (public data)
+hl-read positions 0xYourAddr... --watch    # live, re-polled every few seconds
+hl-read balances 0xYourAddr...     # spot token balances
 hl-read orders 0xYourAddr...       # resting orders
 hl-read fills 0xYourAddr... --limit 20
 hl-read watch ETH                  # live order book over websocket
 ```
 
-Global flags: `--testnet` (use the testnet API), `--json` (raw JSON, great for piping to `jq`).
+Global flags: `--testnet` (use the testnet API), `--json` (raw JSON, great for piping to `jq`), `--retries N` (retry transient failures), `--rate-limit N` (cap HTTP calls/min), `--no-cache` (always fetch fresh).
 
 ```bash
 hl-read --json funding | jq '.[] | select(.funding > 0.0001)'
@@ -46,9 +50,30 @@ hl.book("ETH", depth=5)           # {"bids": [...], "asks": [...], "mid": ..., "
 hl.positions("0xabc...")          # account value + open positions for any address
 hl.funding()                      # funding / mark / oracle / OI per market
 hl.fills("0xabc...", limit=20)    # recent fills
+hl.spot_markets()                 # spot pairs: name, base/quote token, mid
+hl.spot_balances("0xabc...")      # spot token balances for any address
 
-# live stream (opens its own websocket)
+# live streams (open their own websocket — keep the returned Info alive)
 hl.stream_book("ETH", lambda msg: print(msg["data"]["levels"][0][0]))
+hl.stream_user_events("0xabc...", print)   # live fills / funding / liquidations
+```
+
+### Resilience (built in, configurable)
+
+Every HTTP read goes through a default timeout, exponential backoff with jitter on
+transient failures (network errors, HTTP 429/5xx → `HLReadError` once exhausted), an
+optional client-side rate limit, and short-lived caching of the high-frequency market
+endpoints (so e.g. `mid()` in a loop costs one fetch per cache window, not one per call).
+
+```python
+hl = HLRead(
+    max_retries=4,            # retry transient failures
+    rate_limit_per_min=600,   # cap HTTP calls/min (None = off)
+    cache_ttl=1.0,            # seconds to cache mids / funding ctxs (0 = always fresh)
+    meta_ttl=300.0,           # seconds to cache the market/token tables
+    http_timeout=10.0,        # per-request timeout
+)
+hl.clear_cache()              # drop cached data on demand
 ```
 
 ## MCP server (the differentiator)
@@ -76,7 +101,7 @@ HL_READ_TESTNET=1 hl-read-mcp     # testnet
 claude mcp add hl-read -- hl-read-mcp
 ```
 
-Tools exposed to the model: `list_markets`, `get_mids`, `get_book`, `get_funding`, `get_funding_history`, `get_positions`, `get_open_orders`, `get_fills`, `get_candles`. None of them can place an order.
+Tools exposed to the model (11): `list_markets`, `get_mids`, `get_book`, `get_funding`, `get_funding_history`, `get_positions`, `get_open_orders`, `get_fills`, `get_candles`, `get_spot_markets`, `get_spot_balances`. None of them can place an order.
 
 > Ask Claude: *"What's the funding on the top 5 Hyperliquid perps right now, and what's 0xabc…'s open position on the highest one?"* — it answers using only public reads.
 
@@ -87,6 +112,16 @@ Tools exposed to the model: `list_markets`, `get_mids`, `get_book`, `get_funding
 - **Read-only network calls.** Only Hyperliquid's public `info` endpoint and public websocket subscriptions are used.
 
 This makes `hl-read` a sound base for monitoring bots, dashboards, and **autonomous agents** where you want market awareness without ceding the ability to spend.
+
+## Development
+
+```bash
+pip install -e ".[dev]"
+python -m unittest discover -s tests   # or: pytest
+```
+
+The test suite is fully offline — the SDK is mocked, so it exercises the retry/backoff,
+cache, and parsing logic deterministically without touching the network.
 
 ## License
 
