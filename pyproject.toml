@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hl-read"
+version = "0.1.0"
+description = "Key-free, read-only toolkit for Hyperliquid - library, CLI, and MCP server. Structurally cannot trade."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Koki Yonai", email = "akagifreeezworks@gmail.com" }]
+keywords = ["hyperliquid", "crypto", "trading", "mcp", "read-only", "defi", "perpetuals"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+dependencies = ["hyperliquid-python-sdk"]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.2.0"]
+
+[project.urls]
+Homepage = "https://github.com/akagifreeez/hl-read"
+Repository = "https://github.com/akagifreeez/hl-read"
+Issues = "https://github.com/akagifreeez/hl-read/issues"
+
+[project.scripts]
+hl-read = "hl_read.cli:main"
+hl-read-mcp = "hl_read.mcp_server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["hl_read"]

@@ -1,0 +1,277 @@
+"""hl-read command line - read-only Hyperliquid data in your terminal.
+
+    hl-read mids                     # all mid prices
+    hl-read mids BTC ETH             # just these
+    hl-read book ETH --depth 5       # order book snapshot
+    hl-read positions 0xABC...       # anyone's positions (public)
+    hl-read orders 0xABC...          # resting orders
+    hl-read fills 0xABC... --limit 20
+    hl-read funding                  # funding / OI table, sorted by |funding|
+    hl-read markets                  # every perp + max leverage
+    hl-read watch ETH                # live order book over websocket
+
+Global flags: --testnet (use the testnet API), --json (raw JSON output).
+No private key is ever read or accepted.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+
+from . import __version__
+from .info import HLRead
+
+# -- terminal helpers (ANSI, Windows-safe) -------------------------------
+
+
+def _enable_vt() -> bool:
+    """Turn on ANSI escape handling on Windows. Returns True if usable."""
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return False
+        return bool(kernel32.SetConsoleMode(handle, mode.value | 0x0004))
+    except Exception:
+        return False
+
+
+_VT = _enable_vt()
+RED, GREEN, DIM, BOLD, RESET = (
+    ("\033[31m", "\033[32m", "\033[2m", "\033[1m", "\033[0m") if _VT else ("", "", "", "", "")
+)
+
+
+def _clear() -> None:
+    if _VT:
+        sys.stdout.write("\033[H\033[2J\033[3J")  # home, clear screen, clear scrollback
+    else:
+        os.system("cls" if os.name == "nt" else "clear")
+
+
+def _emit(obj, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(obj, indent=2))
+
+
+# -- commands ------------------------------------------------------------
+
+
+def cmd_mids(hl: HLRead, args) -> None:
+    mids = hl.mids()
+    if args.coins:
+        mids = {c.upper(): mids.get(c.upper()) for c in args.coins}
+    if args.json:
+        return _emit(mids, True)
+    for coin, px in sorted(mids.items(), key=lambda kv: kv[0]):
+        px_s = "n/a" if px is None else f"{px:,.6g}"
+        print(f"  {coin:<10} {px_s:>16}")
+
+
+def cmd_book(hl: HLRead, args) -> None:
+    b = hl.book(args.coin, depth=args.depth)
+    if args.json:
+        return _emit(b, True)
+    _render_book(b)
+
+
+def _render_book(b: dict) -> None:
+    coin = b["coin"]
+    print(f"  {BOLD}{coin}-PERP{RESET}   (snapshot)")
+    print("  " + "-" * 34)
+    for lv in reversed(b["asks"]):
+        print(f"  {RED}{lv['px']:>14,.6g}   {lv['sz']:>12}{RESET}")
+    if b["mid"] is not None:
+        print(f"  {DIM}---- mid {b['mid']:,.6g}   spread {b['spread']:,.6g} ----{RESET}")
+    for lv in b["bids"]:
+        print(f"  {GREEN}{lv['px']:>14,.6g}   {lv['sz']:>12}{RESET}")
+
+
+def cmd_positions(hl: HLRead, args) -> None:
+    p = hl.positions(args.address)
+    if args.json:
+        return _emit(p, True)
+    av = p["account_value"]
+    print(f"  address       : {p['address']}")
+    print(f"  account value : {('n/a' if av is None else f'{av:,.2f}')} USDC")
+    print(f"  withdrawable  : {p['withdrawable']}")
+    if not p["positions"]:
+        print("  positions     : none")
+        return
+    print("  positions:")
+    print(f"    {'coin':<7}{'size':>14}{'entry':>14}{'uPnL':>14}{'liq':>14}")
+    for pos in p["positions"]:
+        col = GREEN if (pos["unrealized_pnl"] or 0) >= 0 else RED
+        print(
+            f"    {pos['coin']:<7}{pos['size']:>14,.6g}"
+            f"{(pos['entry_px'] or 0):>14,.6g}"
+            f"{col}{(pos['unrealized_pnl'] or 0):>14,.2f}{RESET}"
+            f"{(pos['liquidation_px'] or 0):>14,.6g}"
+        )
+
+
+def cmd_orders(hl: HLRead, args) -> None:
+    orders = hl.open_orders(args.address)
+    if args.json:
+        return _emit(orders, True)
+    if not orders:
+        print("  open orders   : none")
+        return
+    print(f"    {'oid':<12}{'coin':<7}{'side':<6}{'sz':>14}{'px':>14}")
+    for o in orders:
+        print(f"    {o['oid']:<12}{o['coin']:<7}{o['side']:<6}{o['sz']:>14}{o['limitPx']:>14}")
+
+
+def cmd_fills(hl: HLRead, args) -> None:
+    fills = hl.fills(args.address, limit=args.limit)
+    if args.json:
+        return _emit(fills, True)
+    if not fills:
+        print("  fills         : none")
+        return
+    print(f"    {'time':<20}{'coin':<7}{'dir':<10}{'sz':>12}{'px':>14}{'closedPnL':>14}")
+    for f in fills:
+        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(f.get("time", 0) / 1000))
+        print(
+            f"    {ts:<20}{f.get('coin',''):<7}{f.get('dir',''):<10}"
+            f"{f.get('sz',''):>12}{f.get('px',''):>14}{f.get('closedPnl',''):>14}"
+        )
+
+
+def cmd_funding(hl: HLRead, args) -> None:
+    rows = hl.funding()
+    rows = [r for r in rows if r["funding"] is not None]
+    rows.sort(key=lambda r: abs(r["funding"]), reverse=True)
+    if args.coins:
+        wanted = {c.upper() for c in args.coins}
+        rows = [r for r in rows if r["coin"] in wanted]
+    if args.json:
+        return _emit(rows, True)
+    print(f"    {'coin':<8}{'funding%/hr':>14}{'mark':>14}{'oracle':>14}{'OI':>16}")
+    for r in rows[: args.top if args.top else len(rows)]:
+        fr = r["funding"] * 100
+        col = GREEN if fr >= 0 else RED
+        print(
+            f"    {r['coin']:<8}{col}{fr:>13.4f}%{RESET}"
+            f"{(r['mark_px'] or 0):>14,.6g}{(r['oracle_px'] or 0):>14,.6g}"
+            f"{(r['open_interest'] or 0):>16,.2f}"
+        )
+
+
+def cmd_markets(hl: HLRead, args) -> None:
+    m = hl.markets()
+    if args.json:
+        return _emit(m, True)
+    print(f"  {len(m)} perp markets")
+    print(f"    {'coin':<10}{'maxLev':>8}{'szDec':>8}{'isolated':>10}")
+    for a in m:
+        print(
+            f"    {a['name']:<10}{str(a['max_leverage']):>8}"
+            f"{str(a['sz_decimals']):>8}{str(a['only_isolated']):>10}"
+        )
+
+
+def cmd_watch(hl: HLRead, args) -> None:
+    coin = args.coin.upper()
+    depth = args.depth
+
+    def render(msg) -> None:
+        data = msg.get("data", {})
+        levels = data.get("levels") or [[], []]
+        bids, asks = levels[0][:depth], levels[1][:depth]
+        net = "testnet" if hl.testnet else "mainnet"
+        out = [
+            f"  {BOLD}{coin}-PERP{RESET}   {net}   (updated {time.strftime('%H:%M:%S')})",
+            "  " + "-" * 34,
+        ]
+        for lv in reversed(asks):
+            out.append(f"  {RED}{float(lv['px']):>14,.6g}   {float(lv['sz']):>12}{RESET}")
+        if bids and asks:
+            bb, ba = float(bids[0]["px"]), float(asks[0]["px"])
+            out.append(f"  {DIM}---- mid {(bb+ba)/2:,.6g}   spread {ba-bb:,.6g} ----{RESET}")
+        for lv in bids:
+            out.append(f"  {GREEN}{float(lv['px']):>14,.6g}   {float(lv['sz']):>12}{RESET}")
+        _clear()
+        sys.stdout.write("\n".join(out) + "\n")
+        sys.stdout.flush()
+
+    hl.stream_book(coin, render)
+    print(f"subscribed to {coin} order book ({'testnet' if hl.testnet else 'mainnet'}). Ctrl+C to quit.")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+
+
+# -- argument parsing ----------------------------------------------------
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="hl-read", description="Read-only Hyperliquid data. No keys, ever.")
+    p.add_argument("--version", action="version", version=f"hl-read {__version__}")
+    p.add_argument("--testnet", action="store_true", help="use the testnet API")
+    p.add_argument("--json", action="store_true", help="emit raw JSON")
+    sub = p.add_subparsers(dest="command", required=True)
+
+    sp = sub.add_parser("mids", help="mid prices")
+    sp.add_argument("coins", nargs="*", help="optional coins to filter")
+    sp.set_defaults(func=cmd_mids)
+
+    sp = sub.add_parser("book", help="order book snapshot")
+    sp.add_argument("coin")
+    sp.add_argument("--depth", type=int, default=10)
+    sp.set_defaults(func=cmd_book)
+
+    sp = sub.add_parser("positions", help="positions for an address")
+    sp.add_argument("address")
+    sp.set_defaults(func=cmd_positions)
+
+    sp = sub.add_parser("orders", help="open orders for an address")
+    sp.add_argument("address")
+    sp.set_defaults(func=cmd_orders)
+
+    sp = sub.add_parser("fills", help="recent fills for an address")
+    sp.add_argument("address")
+    sp.add_argument("--limit", type=int, default=50)
+    sp.set_defaults(func=cmd_fills)
+
+    sp = sub.add_parser("funding", help="funding / OI table")
+    sp.add_argument("coins", nargs="*", help="optional coins to filter")
+    sp.add_argument("--top", type=int, default=0, help="show only the top N by |funding|")
+    sp.set_defaults(func=cmd_funding)
+
+    sp = sub.add_parser("markets", help="list perp markets")
+    sp.set_defaults(func=cmd_markets)
+
+    sp = sub.add_parser("watch", help="live order book (websocket)")
+    sp.add_argument("coin")
+    sp.add_argument("--depth", type=int, default=10)
+    sp.set_defaults(func=cmd_watch)
+
+    return p
+
+
+def main(argv=None) -> int:
+    args = build_parser().parse_args(argv)
+    hl = HLRead(testnet=args.testnet)
+    try:
+        args.func(hl, args)
+    except KeyboardInterrupt:
+        return 130
+    except Exception as e:  # surface SDK / network errors cleanly
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
