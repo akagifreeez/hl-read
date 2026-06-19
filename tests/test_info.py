@@ -6,7 +6,9 @@ for method tests. Run with ``pytest`` or ``python -m unittest``.
 import unittest
 from unittest import mock
 
-from hl_read.info import HLRead, HLReadError, _f, _is_transient
+import time
+
+from hl_read.info import HLRead, HLReadError, ResilientStream, _f, _is_transient
 
 
 def make_hl(**kw):
@@ -161,6 +163,69 @@ class TestHealth(unittest.TestCase):
         fake.all_mids.side_effect = Timeout("boom")
         self._hl_with(fake).health()
         self.assertEqual(fake.all_mids.call_count, 1)
+
+
+class _FakeMgr:
+    """Stand-in for the SDK WebsocketManager thread. is_alive() drains a script."""
+
+    def __init__(self, alive_sequence):
+        self._seq = list(alive_sequence)
+
+    def is_alive(self):
+        return self._seq.pop(0) if self._seq else False
+
+
+class _FakeWsInfo:
+    def __init__(self, mgr):
+        self.ws_manager = mgr
+        self.subscribed = []
+        self.disconnected = False
+
+    def subscribe(self, sub, cb):
+        self.subscribed.append(sub)
+
+    def disconnect_websocket(self):
+        self.disconnected = True
+
+
+class TestResilientStream(unittest.TestCase):
+    def test_reconnects_and_resubscribes_on_drop(self):
+        infos = []
+
+        def factory(_url):
+            fi = _FakeWsInfo(_FakeMgr([True, False]))  # alive once, then dropped
+            infos.append(fi)
+            return fi
+
+        sub = {"type": "l2Book", "coin": "BTC"}
+        rs = ResilientStream(
+            "https://x", [(sub, lambda m: None)],
+            backoff_base=0.0, backoff_max=0.0, poll_interval=0.01, _info_factory=factory,
+        ).start()
+        time.sleep(0.2)  # enough cycles for at least one reconnect
+        rs.close()
+        self.assertGreaterEqual(len(infos), 2)          # it rebuilt the connection
+        self.assertEqual(infos[0].subscribed, [sub])    # subscribed on first connect
+        self.assertTrue(infos[0].disconnected)          # old connection torn down
+        self.assertEqual(infos[1].subscribed, [sub])    # re-subscribed on reconnect
+
+    def test_close_stops_and_disconnects(self):
+        infos = []
+
+        def factory(_url):
+            fi = _FakeWsInfo(_FakeMgr([True] * 1000))  # stays "alive"
+            infos.append(fi)
+            return fi
+
+        rs = ResilientStream(
+            "https://x", [({"type": "trades", "coin": "ETH"}, lambda m: None)],
+            poll_interval=0.01, _info_factory=factory,
+        ).start()
+        time.sleep(0.05)
+        rs.close()
+        time.sleep(0.05)
+        self.assertEqual(len(infos), 1)            # no spurious reconnects while healthy
+        self.assertTrue(infos[0].disconnected)     # close() tore it down
 
 
 class TestParsing(unittest.TestCase):

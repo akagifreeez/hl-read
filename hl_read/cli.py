@@ -483,13 +483,22 @@ def cmd_watch(hl: HLRead, args) -> None:
         sys.stdout.write("\n".join(out) + "\n")
         sys.stdout.flush()
 
-    hl.stream_book(coin, render)
-    print(f"subscribed to {coin} order book ({'testnet' if hl.testnet else 'mainnet'}). Ctrl+C to quit.")
+    def on_reconnect() -> None:
+        sys.stderr.write(f"[{time.strftime('%H:%M:%S')}] reconnected to {coin} book\n")
+        sys.stderr.flush()
+
+    stream = hl.resilient_stream_book(coin, render, on_reconnect=on_reconnect)
+    print(
+        f"subscribed to {coin} order book ({'testnet' if hl.testnet else 'mainnet'}), "
+        "auto-reconnecting. Ctrl+C to quit."
+    )
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
         pass
+    finally:
+        stream.close()
 
 
 # -- argument parsing ----------------------------------------------------

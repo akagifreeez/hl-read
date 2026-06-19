@@ -77,7 +77,14 @@ hl.spot_balances("0xabc...")      # spot token balances for any address
 # live streams (open their own websocket — keep the returned Info alive)
 hl.stream_book("ETH", lambda msg: print(msg["data"]["levels"][0][0]))
 hl.stream_user_events("0xabc...", print)   # live fills / funding / liquidations
+
+# auto-reconnecting streams — survive a dropped connection (the SDK's don't):
+# the supervisor rebuilds the socket and re-subscribes with backoff.
+stream = hl.resilient_stream_book("BTC", on_msg, on_reconnect=lambda: print("reconnected"))
+# ... stream.connected -> bool;  stream.close() to stop
 ```
+
+The CLI `watch` uses this, so a long-running order-book view recovers on its own after a network blip.
 
 ### Resilience (built in, configurable)
 

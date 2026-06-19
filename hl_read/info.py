@@ -27,7 +27,7 @@ from typing import Any, Callable, Optional
 from hyperliquid.info import Info
 from hyperliquid.utils import constants
 
-__all__ = ["HLRead", "HLReadError"]
+__all__ = ["HLRead", "HLReadError", "ResilientStream"]
 
 
 class HLReadError(RuntimeError):
@@ -595,3 +595,136 @@ class HLRead:
         info = Info(self.base_url, skip_ws=False)
         info.subscribe({"type": "userEvents", "user": address}, callback)
         return info
+
+    # -- resilient streaming (auto-reconnect; survives dropped connections) --
+
+    def resilient_stream(
+        self,
+        subscriptions: list,
+        *,
+        on_reconnect: Optional[Callable[[], None]] = None,
+        backoff_base: float = 1.0,
+        backoff_max: float = 30.0,
+    ) -> "ResilientStream":
+        """Open auto-reconnecting websocket subscriptions.
+
+        The SDK's websocket has no reconnect: when the socket drops, its thread
+        dies and the subscriptions are lost. This supervises the connection and,
+        on drop, rebuilds it and re-subscribes with exponential backoff.
+
+        ``subscriptions`` is a list of ``(subscription_dict, callback)`` pairs,
+        e.g. ``[({"type": "l2Book", "coin": "BTC"}, cb)]``. Returns a *started*
+        ``ResilientStream``; call ``.close()`` to stop. Read-only: it only ever
+        subscribes to public feeds.
+        """
+        return ResilientStream(
+            self.base_url,
+            subscriptions,
+            on_reconnect=on_reconnect,
+            backoff_base=backoff_base,
+            backoff_max=backoff_max,
+        ).start()
+
+    def resilient_stream_book(self, coin: str, callback: Callable[[dict], None], **kw) -> "ResilientStream":
+        """Auto-reconnecting L2 book stream for one coin."""
+        return self.resilient_stream([({"type": "l2Book", "coin": coin.upper()}, callback)], **kw)
+
+    def resilient_stream_trades(self, coin: str, callback: Callable[[dict], None], **kw) -> "ResilientStream":
+        """Auto-reconnecting trade-tape stream for one coin."""
+        return self.resilient_stream([({"type": "trades", "coin": coin.upper()}, callback)], **kw)
+
+    def resilient_stream_user_events(self, address: str, callback: Callable[[dict], None], **kw) -> "ResilientStream":
+        """Auto-reconnecting user-events stream (fills/funding/liquidations) for an address."""
+        return self.resilient_stream([({"type": "userEvents", "user": address}, callback)], **kw)
+
+
+class ResilientStream:
+    """Keeps a set of Hyperliquid websocket subscriptions alive across drops.
+
+    The SDK's ``WebsocketManager`` calls ``run_forever()`` with no reconnect and
+    has no on-close handler, so a dropped socket ends the thread and silently
+    loses every subscription. This runs a small supervisor thread that watches
+    the underlying ws thread and, when it dies, tears the connection down and
+    rebuilds it (re-subscribing all feeds) with exponential backoff.
+
+    Read-only by construction: it only opens ``Info(skip_ws=False)`` and calls
+    ``subscribe`` - there is no trade/sign path here either.
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        subscriptions: list,
+        *,
+        on_reconnect: Optional[Callable[[], None]] = None,
+        backoff_base: float = 1.0,
+        backoff_max: float = 30.0,
+        poll_interval: float = 0.5,
+        _info_factory: Optional[Callable[[str], Info]] = None,
+    ) -> None:
+        self._base_url = base_url
+        self._subs = list(subscriptions)
+        self._on_reconnect = on_reconnect
+        self._backoff_base = float(backoff_base)
+        self._backoff_max = float(backoff_max)
+        self._poll = float(poll_interval)
+        self._info_factory = _info_factory or (lambda url: Info(url, skip_ws=False))
+        self._info: Optional[Info] = None
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="hl-read-resilient-ws", daemon=True)
+
+    def start(self) -> "ResilientStream":
+        self._thread.start()
+        return self
+
+    def _connect(self) -> Info:
+        info = self._info_factory(self._base_url)
+        for sub, cb in self._subs:
+            info.subscribe(sub, cb)
+        return info
+
+    def _safe_disconnect(self) -> None:
+        info, self._info = self._info, None
+        if info is not None:
+            try:
+                info.disconnect_websocket()
+            except Exception:  # noqa: BLE001 - best-effort teardown
+                pass
+
+    def _run(self) -> None:
+        attempt = 0
+        first = True
+        while not self._stop.is_set():
+            try:
+                self._info = self._connect()
+            except Exception:  # noqa: BLE001 - connect failed; back off and retry
+                self._stop.wait(min(self._backoff_base * (2 ** attempt), self._backoff_max))
+                attempt += 1
+                continue
+            if not first and self._on_reconnect is not None:
+                try:
+                    self._on_reconnect()
+                except Exception:  # noqa: BLE001 - user callback must not kill the loop
+                    pass
+            first = False
+            attempt = 0
+            mgr = getattr(self._info, "ws_manager", None)
+            while not self._stop.is_set() and mgr is not None and mgr.is_alive():
+                self._stop.wait(self._poll)
+            if self._stop.is_set():
+                break
+            # connection dropped -> tear down, back off, then reconnect at loop top
+            self._safe_disconnect()
+            self._stop.wait(min(self._backoff_base * (2 ** attempt), self._backoff_max))
+            attempt += 1
+        self._safe_disconnect()
+
+    def close(self) -> None:
+        """Stop supervising and close the underlying websocket."""
+        self._stop.set()
+        self._safe_disconnect()
+
+    @property
+    def connected(self) -> bool:
+        mgr = getattr(self._info, "ws_manager", None)
+        return mgr is not None and mgr.is_alive()
