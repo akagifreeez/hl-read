@@ -42,6 +42,16 @@ mcp = FastMCP("hl-read")
 
 
 @mcp.tool()
+def get_health() -> dict:
+    """Liveness probe: is the Hyperliquid API reachable and how fast (latency_ms)?
+
+    Single lightweight read, no retries. Never errors - a failure returns
+    ok=False with an error string.
+    """
+    return hl.health()
+
+
+@mcp.tool()
 def list_markets() -> list[dict]:
     """List every Hyperliquid perp market with max leverage and size decimals."""
     return hl.markets()

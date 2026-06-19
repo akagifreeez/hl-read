@@ -201,6 +201,36 @@ class HLRead:
         with self._lock:
             self._cache.clear()
 
+    def health(self) -> dict:
+        """Liveness probe: is the API reachable, and how fast?
+
+        Does a single lightweight read (deliberately *not* through ``_call`` -
+        this measures the real round-trip, not the retry layer) and reports
+        latency plus a basic sanity signal. Never raises: a failure comes back
+        as ``ok=False`` with an ``error`` string::
+
+            {"api_url", "testnet", "ok": bool, "latency_ms": float|None,
+             "markets": int|None, "error": str|None}
+        """
+        out = {
+            "api_url": self.base_url,
+            "testnet": self.testnet,
+            "ok": False,
+            "latency_ms": None,
+            "markets": None,
+            "error": None,
+        }
+        t0 = time.monotonic()
+        try:
+            mids = self._info.all_mids()
+            out["latency_ms"] = round((time.monotonic() - t0) * 1000, 1)
+            out["markets"] = len(mids) if hasattr(mids, "__len__") else None
+            out["ok"] = bool(mids)
+        except Exception as e:  # noqa: BLE001 - report, never raise from a probe
+            out["latency_ms"] = round((time.monotonic() - t0) * 1000, 1)
+            out["error"] = f"{type(e).__name__}: {e}"
+        return out
+
     # -- raw cached fetchers ---------------------------------------------
 
     def _meta_raw(self) -> dict:

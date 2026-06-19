@@ -132,6 +132,37 @@ class TestConstruction(unittest.TestCase):
         self.assertIsNot(hl._lock, hl._rate_lock)
 
 
+class TestHealth(unittest.TestCase):
+    def _hl_with(self, fake):
+        hl = make_hl()
+        hl._info = fake
+        return hl
+
+    def test_ok(self):
+        fake = mock.MagicMock()
+        fake.all_mids.return_value = {"BTC": "1", "ETH": "2"}
+        h = self._hl_with(fake).health()
+        self.assertTrue(h["ok"])
+        self.assertEqual(h["markets"], 2)
+        self.assertIsNone(h["error"])
+        self.assertIsNotNone(h["latency_ms"])
+
+    def test_down_does_not_raise(self):
+        fake = mock.MagicMock()
+        fake.all_mids.side_effect = Timeout("boom")
+        h = self._hl_with(fake).health()
+        self.assertFalse(h["ok"])
+        self.assertIn("Timeout", h["error"])
+        self.assertIsNotNone(h["latency_ms"])  # elapsed time still recorded
+
+    def test_no_retry(self):
+        # health probes once - it must not invoke the retry layer.
+        fake = mock.MagicMock()
+        fake.all_mids.side_effect = Timeout("boom")
+        self._hl_with(fake).health()
+        self.assertEqual(fake.all_mids.call_count, 1)
+
+
 class TestParsing(unittest.TestCase):
     def _hl_with(self, fake):
         hl = make_hl()

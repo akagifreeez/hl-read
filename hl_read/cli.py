@@ -16,6 +16,7 @@
     hl-read spot                     # every spot pair + mid price
     hl-read balances 0xABC...        # spot token balances
     hl-read watch ETH                # live order book over websocket
+    hl-read health                   # is the API up? round-trip latency (exit 1 if down)
     hl-read --format csv fills 0xABC... --since 30d   # any list command as CSV
     hl-read export ledger 0xABC... --out ledger.csv   # write straight to a UTF-8 file
 
@@ -401,6 +402,24 @@ def cmd_markets(hl: HLRead, args) -> None:
         )
 
 
+def cmd_health(hl: HLRead, args) -> int:
+    h = hl.health()
+    if _emit_data(args, h):
+        return 0 if h["ok"] else 1
+    status = f"{GREEN}OK{RESET}" if h["ok"] else f"{RED}DOWN{RESET}"
+    net = "testnet" if h["testnet"] else "mainnet"
+    print(f"  hl-read health   {net}")
+    print(f"    endpoint : {h['api_url']}")
+    print(f"    status   : {status}")
+    lat = "n/a" if h["latency_ms"] is None else f"{h['latency_ms']} ms"
+    print(f"    latency  : {lat}")
+    if h["markets"] is not None:
+        print(f"    markets  : {h['markets']}")
+    if h["error"]:
+        print(f"    error    : {h['error']}")
+    return 0 if h["ok"] else 1
+
+
 def cmd_export(hl: HLRead, args) -> None:
     """Fetch fills/ledger/candles and write them to a UTF-8 file (csv default).
 
@@ -553,6 +572,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--depth", type=int, default=10)
     sp.set_defaults(func=cmd_watch)
 
+    sp = sub.add_parser("health", help="probe API reachability + latency (exit 1 if down)")
+    sp.set_defaults(func=cmd_health)
+
     sp = sub.add_parser("export", help="write fills/ledger/candles to a UTF-8 file (csv default)")
     sp.add_argument("what", choices=["fills", "ledger", "candles"])
     sp.add_argument("target", help="address (fills/ledger) or coin (candles)")
@@ -577,13 +599,13 @@ def main(argv=None) -> int:
         meta_ttl=0.0 if args.no_cache else 300.0,
     )
     try:
-        args.func(hl, args)
+        rc = args.func(hl, args)
     except KeyboardInterrupt:
         return 130
     except Exception as e:  # surface SDK / network errors cleanly
         print(f"error: {e}", file=sys.stderr)
         return 1
-    return 0
+    return rc or 0
 
 
 if __name__ == "__main__":

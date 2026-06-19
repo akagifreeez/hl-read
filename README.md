@@ -35,6 +35,7 @@ hl-read orders 0xYourAddr...       # resting orders
 hl-read fills 0xYourAddr... --limit 20
 hl-read fills 0xYourAddr... --since 7d     # fills within a time window (e.g. 24h/7d, 2024-01-31)
 hl-read watch ETH                  # live order book over websocket
+hl-read health                     # is the API up? round-trip latency (exit 1 if down)
 ```
 
 Global flags: `--testnet` (use the testnet API), `--json` (raw JSON, great for piping to `jq`), `--format table|json|csv|ndjson` (output format; `--json` is the alias for `--format json`), `--retries N` (retry transient failures), `--rate-limit N` (cap HTTP calls/min), `--no-cache` (always fetch fresh).
@@ -69,6 +70,7 @@ hl.predicted_fundings()           # predicted funding per coin across venues (HL
 hl.fills("0xabc...", limit=20)    # recent fills
 hl.fills_by_time("0xabc...", start_ms, end_ms)   # fills within an epoch-ms window
 hl.ledger("0xabc...")             # deposits/withdrawals/transfers (non-funding ledger)
+hl.health()                       # liveness probe: {ok, latency_ms, markets, error}
 hl.spot_markets()                 # spot pairs: name, base/quote token, mid
 hl.spot_balances("0xabc...")      # spot token balances for any address
 
@@ -120,7 +122,7 @@ HL_READ_TESTNET=1 hl-read-mcp     # testnet
 claude mcp add hl-read -- hl-read-mcp
 ```
 
-Tools exposed to the model (15): `list_markets`, `get_mids`, `get_book`, `get_funding`, `get_funding_history`, `get_predicted_fundings`, `get_positions`, `get_portfolio`, `get_open_orders`, `get_ledger`, `get_fills`, `get_fills_by_time`, `get_candles`, `get_spot_markets`, `get_spot_balances`. None of them can place an order.
+Tools exposed to the model (16): `get_health`, `list_markets`, `get_mids`, `get_book`, `get_funding`, `get_funding_history`, `get_predicted_fundings`, `get_positions`, `get_portfolio`, `get_open_orders`, `get_ledger`, `get_fills`, `get_fills_by_time`, `get_candles`, `get_spot_markets`, `get_spot_balances`. None of them can place an order.
 
 > Ask Claude: *"What's the funding on the top 5 Hyperliquid perps right now, and what's 0xabc…'s open position on the highest one?"* — it answers using only public reads.
 
