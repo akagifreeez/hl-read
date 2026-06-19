@@ -38,7 +38,7 @@ hl-read watch ETH                  # live order book over websocket
 hl-read health                     # is the API up? round-trip latency (exit 1 if down)
 ```
 
-Global flags: `--testnet` (use the testnet API), `--json` (raw JSON, great for piping to `jq`), `--format table|json|csv|ndjson` (output format; `--json` is the alias for `--format json`), `--retries N` (retry transient failures), `--rate-limit N` (cap HTTP calls/min), `--no-cache` (always fetch fresh).
+Global flags: `--testnet` (use the testnet API), `--json` (raw JSON, great for piping to `jq`), `--format table|json|csv|ndjson` (output format; `--json` is the alias for `--format json`), `--retries N` (retry transient failures), `--rate-limit N` (cap HTTP calls/min), `--no-cache` (always fetch fresh), `--api-url URL` (override the endpoint, e.g. a proxy/mirror), `--fallback-url URL` (repeatable; tried on persistent failure).
 
 ```bash
 hl-read --json funding | jq '.[] | select(.funding > 0.0001)'
@@ -61,6 +61,9 @@ hl-read --format ndjson export candles BTC --hours 168 --out btc.ndjson
 from hl_read import HLRead
 
 hl = HLRead()                     # mainnet; HLRead(testnet=True) for testnet
+# custom endpoint + optional fallbacks (Hyperliquid is single-host, so these
+# only matter for your own proxy/mirror; failover applies at connect and reads):
+# HLRead(api_url="https://my-proxy", fallback_urls=["https://api.hyperliquid.xyz"])
 hl.mids()["BTC"]                  # current mid price
 hl.book("ETH", depth=5)           # {"bids": [...], "asks": [...], "mid": ..., "spread": ...}
 hl.positions("0xabc...")          # account value + open positions for any address
@@ -92,6 +95,8 @@ Every HTTP read goes through a default timeout, exponential backoff with jitter 
 transient failures (network errors, HTTP 429/5xx → `HLReadError` once exhausted), an
 optional client-side rate limit, and short-lived caching of the high-frequency market
 endpoints (so e.g. `mid()` in a loop costs one fetch per cache window, not one per call).
+Websocket streams can auto-reconnect (`resilient_stream*`), and you can point at a custom
+endpoint with optional fallbacks (applied at connect and on persistent read failure).
 
 ```python
 hl = HLRead(
@@ -100,6 +105,8 @@ hl = HLRead(
     cache_ttl=1.0,            # seconds to cache mids / funding ctxs (0 = always fresh)
     meta_ttl=300.0,           # seconds to cache the market/token tables
     http_timeout=10.0,        # per-request timeout
+    api_url=None,             # override endpoint (None = official mainnet/testnet)
+    fallback_urls=None,       # e.g. ["https://api.hyperliquid.xyz"]; tried on failure
 )
 hl.clear_cache()              # drop cached data on demand
 ```

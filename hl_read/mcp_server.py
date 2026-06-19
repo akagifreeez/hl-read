@@ -36,7 +36,8 @@ except ImportError as e:  # pragma: no cover - friendly message instead of a tra
     ) from e
 
 _TESTNET = os.environ.get("HL_READ_TESTNET", "").lower() in ("1", "true", "yes")
-hl = HLRead(testnet=_TESTNET)
+_API_URL = os.environ.get("HL_READ_API_URL") or None
+hl = HLRead(testnet=_TESTNET, api_url=_API_URL)
 
 mcp = FastMCP("hl-read")
 

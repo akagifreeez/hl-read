@@ -114,42 +114,91 @@ class HLRead:
         cache_ttl: float = 1.0,
         meta_ttl: float = 300.0,
         http_timeout: Optional[float] = 10.0,
+        api_url: Optional[str] = None,
+        fallback_urls: Optional[list] = None,
     ) -> None:
         self.testnet = testnet
-        self.base_url = constants.TESTNET_API_URL if testnet else constants.MAINNET_API_URL
+        primary = api_url or (constants.TESTNET_API_URL if testnet else constants.MAINNET_API_URL)
+        # Endpoint list: primary first, then optional fallbacks tried on
+        # persistent failure. Hyperliquid mainnet is a single official host, so
+        # fallbacks are a no-op unless you point at a proxy/mirror of your own.
+        self._urls = [primary] + [u for u in (fallback_urls or []) if u]
+        self._url_idx = 0
+        self.base_url = primary
         self.max_retries = max(0, int(max_retries))
         self.backoff_base = float(backoff_base)
         self.backoff_max = float(backoff_max)
         self.cache_ttl = float(cache_ttl)
         self.meta_ttl = float(meta_ttl)
+        self._http_timeout = http_timeout
         self._min_interval = (60.0 / rate_limit_per_min) if rate_limit_per_min else 0.0
 
-        # Pass the timeout where the SDK actually applies it: ``API.post`` sends
-        # ``timeout=self.timeout`` on every call, so a stalled socket raises (and
-        # the retry loop can react) instead of hanging forever.
-        self._info = Info(self.base_url, skip_ws=True, timeout=http_timeout)
         self._lock = threading.Lock()        # guards the cache
         self._rate_lock = threading.Lock()   # guards only the rate-limiter clock
         self._cache: dict[str, tuple[float, Any]] = {}
         self._last_call = 0.0
+        self._info = None
+        self._connect_initial()
 
-        # Belt-and-suspenders: also enforce the timeout at the session layer in
-        # case the SDK forwards an explicit ``timeout=None`` (which would beat a
-        # plain setdefault), so we override None specifically.
-        if http_timeout:
+    def _connect_initial(self) -> None:
+        """Build the initial ``Info``, walking fallbacks if the primary won't
+        connect (the SDK constructor itself hits the network to load symbol
+        tables, so a down primary must fail over here too, not just at read time).
+        """
+        last_err = None
+        for i in range(len(self._urls)):
+            self._url_idx = i
+            self.base_url = self._urls[i]
             try:
-                sess = getattr(self._info, "session", None)
+                self._info = self._make_info(self.base_url)
+                return
+            except Exception as e:  # noqa: BLE001 - try the next configured host
+                last_err = e
+        raise HLReadError(
+            f"could not connect to any endpoint {self._urls}: "
+            f"{type(last_err).__name__}: {last_err}"
+        ) from last_err
+
+    def _make_info(self, url: str) -> Info:
+        """Build a read-only ``Info`` for ``url`` with the request timeout enforced.
+
+        The timeout goes to the constructor (where ``API.post`` reads it) AND is
+        re-applied at the session layer, since the SDK forwards an explicit
+        ``timeout=None`` that would beat a plain ``setdefault``.
+        """
+        info = Info(url, skip_ws=True, timeout=self._http_timeout)
+        ht = self._http_timeout
+        if ht:
+            try:
+                sess = getattr(info, "session", None)
                 if sess is not None:
                     _orig = sess.request
 
                     def _request(*args: Any, **kwargs: Any) -> Any:
                         if kwargs.get("timeout") is None:
-                            kwargs["timeout"] = http_timeout
+                            kwargs["timeout"] = ht
                         return _orig(*args, **kwargs)
 
                     sess.request = _request  # type: ignore[method-assign]
             except Exception:
                 pass
+        return info
+
+    def _failover(self) -> bool:
+        """Switch to the next configured fallback host (rebuilding ``Info``).
+
+        Returns False when no further host is reachable. Hosts whose ``Info``
+        can't even be constructed are skipped.
+        """
+        while self._url_idx + 1 < len(self._urls):
+            self._url_idx += 1
+            self.base_url = self._urls[self._url_idx]
+            try:
+                self._info = self._make_info(self.base_url)
+                return True
+            except Exception:  # noqa: BLE001 - that host is down too; try the next
+                continue
+        return False
 
     # -- internal: rate limit + retry + cache ----------------------------
 
@@ -164,24 +213,39 @@ class HLRead:
                 time.sleep(wait)
             self._last_call = time.monotonic()
 
-    def _call(self, fn: Callable[..., Any], *args: Any) -> Any:
-        """Invoke an SDK method with rate limiting + retry/backoff on transients."""
-        attempt = 0
-        while True:
-            self._throttle()
-            try:
-                return fn(*args)
-            except Exception as e:  # noqa: BLE001 - classified by _is_transient
-                if not _is_transient(e):
-                    raise
-                attempt += 1
-                if attempt > self.max_retries:
-                    raise HLReadError(
-                        f"Hyperliquid read failed after {self.max_retries} "
-                        f"retries: {type(e).__name__}: {e}"
-                    ) from e
-                delay = min(self.backoff_base * (2 ** (attempt - 1)), self.backoff_max)
-                time.sleep(delay * (0.7 + 0.6 * random.random()))  # full-ish jitter
+    def _call(self, fn, *args: Any) -> Any:
+        """Invoke an SDK read with rate limiting, retry/backoff, and (if
+        configured) host failover.
+
+        ``fn`` may be a method *name* (str) - re-resolved against the current
+        ``Info`` on each attempt, so a failover transparently rebinds it - or a
+        bound callable (used as-is; callables can't be rebound across a failover).
+        """
+        last_err: Optional[Exception] = None
+        for host_i in range(max(1, len(self._urls))):
+            attempt = 0
+            while True:
+                self._throttle()
+                try:
+                    target = getattr(self._info, fn) if isinstance(fn, str) else fn
+                    return target(*args)
+                except Exception as e:  # noqa: BLE001 - classified by _is_transient
+                    if not _is_transient(e):
+                        raise
+                    last_err = e
+                    attempt += 1
+                    if attempt > self.max_retries:
+                        break
+                    delay = min(self.backoff_base * (2 ** (attempt - 1)), self.backoff_max)
+                    time.sleep(delay * (0.7 + 0.6 * random.random()))  # full-ish jitter
+            if host_i + 1 < len(self._urls) and self._failover():
+                continue
+            break
+        across = f" across {len(self._urls)} hosts" if len(self._urls) > 1 else ""
+        raise HLReadError(
+            f"Hyperliquid read failed after {self.max_retries} retries{across}: "
+            f"{type(last_err).__name__}: {last_err}"
+        ) from last_err
 
     def _cached(self, key: str, ttl: float, producer: Callable[[], Any]) -> Any:
         if ttl <= 0:
@@ -234,17 +298,17 @@ class HLRead:
     # -- raw cached fetchers ---------------------------------------------
 
     def _meta_raw(self) -> dict:
-        return self._cached("meta", self.meta_ttl, lambda: self._call(self._info.meta))
+        return self._cached("meta", self.meta_ttl, lambda: self._call("meta"))
 
     def _spot_meta_raw(self) -> dict:
-        return self._cached("spot_meta", self.meta_ttl, lambda: self._call(self._info.spot_meta))
+        return self._cached("spot_meta", self.meta_ttl, lambda: self._call("spot_meta"))
 
     def _all_mids_raw(self) -> dict:
-        return self._cached("all_mids", self.cache_ttl, lambda: self._call(self._info.all_mids))
+        return self._cached("all_mids", self.cache_ttl, lambda: self._call("all_mids"))
 
     def _meta_ctxs_raw(self) -> tuple:
         return self._cached(
-            "meta_ctxs", self.cache_ttl, lambda: self._call(self._info.meta_and_asset_ctxs)
+            "meta_ctxs", self.cache_ttl, lambda: self._call("meta_and_asset_ctxs")
         )
 
     # -- markets / prices -------------------------------------------------
@@ -310,7 +374,7 @@ class HLRead:
     def book(self, coin: str, depth: int = 10) -> dict:
         """Normalized order-book snapshot: ``bids``/``asks`` plus mid & spread."""
         coin = coin.upper()
-        snap = self._call(self._info.l2_snapshot, coin)
+        snap = self._call("l2_snapshot", coin)
         levels = snap.get("levels") or [[], []]
 
         def _side(rows: list) -> list[dict]:
@@ -356,7 +420,7 @@ class HLRead:
 
     def funding_history(self, coin: str, hours: float = 24) -> list[dict]:
         """Historical funding rates for one market over the last ``hours``."""
-        return self._call(self._info.funding_history, coin.upper(), _ms_ago(hours=hours))
+        return self._call("funding_history", coin.upper(), _ms_ago(hours=hours))
 
     def predicted_fundings(self) -> list[dict]:
         """Predicted upcoming funding per coin across venues (Hyperliquid + CEXes).
@@ -374,7 +438,7 @@ class HLRead:
         raw = self._cached(
             "predicted_fundings",
             self.cache_ttl,
-            lambda: self._call(self._info.post, "/info", {"type": "predictedFundings"}),
+            lambda: self._call("post", "/info", {"type": "predictedFundings"}),
         )
         out: list[dict] = []
         for entry in raw or []:
@@ -400,7 +464,7 @@ class HLRead:
     def candles(self, coin: str, interval: str = "1h", hours: float = 24) -> list[dict]:
         """OHLC candles for one market. ``interval`` e.g. 1m/15m/1h/4h/1d."""
         return self._call(
-            self._info.candles_snapshot,
+            "candles_snapshot",
             coin.upper(),
             interval,
             _ms_ago(hours=hours),
@@ -411,7 +475,7 @@ class HLRead:
 
     def positions(self, address: str) -> dict:
         """Account value and open perp positions for any address."""
-        st = self._call(self._info.user_state, address)
+        st = self._call("user_state", address)
         ms = st.get("marginSummary", {})
         out = {
             "address": address,
@@ -451,7 +515,7 @@ class HLRead:
                                  "vlm": float, "start_value": float,
                                  "end_value": float, "period_pnl": float}, ...}}
         """
-        raw = self._call(self._info.portfolio, address)
+        raw = self._call("portfolio", address)
         periods: dict[str, dict] = {}
         for entry in raw or []:
             if not entry or len(entry) < 2:
@@ -479,7 +543,7 @@ class HLRead:
 
     def spot_balances(self, address: str) -> dict:
         """Spot token balances for any address (public; address only, no key)."""
-        st = self._call(self._info.spot_user_state, address)
+        st = self._call("spot_user_state", address)
         balances = [
             {
                 "coin": b.get("coin"),
@@ -494,11 +558,11 @@ class HLRead:
 
     def open_orders(self, address: str) -> list[dict]:
         """Resting orders for any address."""
-        return self._call(self._info.open_orders, address)
+        return self._call("open_orders", address)
 
     def fills(self, address: str, limit: int = 100) -> list[dict]:
         """Recent fills for any address (most recent first), capped at ``limit``."""
-        f = self._call(self._info.user_fills, address)
+        f = self._call("user_fills", address)
         return f[:limit] if limit else f
 
     def fills_by_time(
@@ -511,7 +575,7 @@ class HLRead:
         so narrow the window if you hit that. Window-bounded, hence no ``limit``.
         """
         return self._call(
-            self._info.user_fills_by_time,
+            "user_fills_by_time",
             address,
             int(start_ms),
             int(end_ms) if end_ms is not None else None,
@@ -532,7 +596,7 @@ class HLRead:
               "usdc": 250.5, "delta": {...full raw delta...}}, ...]
         """
         raw = self._call(
-            self._info.user_non_funding_ledger_updates,
+            "user_non_funding_ledger_updates",
             address,
             int(start_ms),
             int(end_ms) if end_ms is not None else None,
@@ -553,15 +617,15 @@ class HLRead:
 
     def user_funding(self, address: str, days: float = 30) -> list[dict]:
         """Funding payments received/paid by an address over the last ``days``."""
-        return self._call(self._info.user_funding_history, address, _ms_ago(days=days))
+        return self._call("user_funding_history", address, _ms_ago(days=days))
 
     def referral(self, address: str) -> dict:
         """Referral / builder-code state for an address (cumulative fees etc.)."""
-        return self._call(self._info.query_referral_state, address)
+        return self._call("query_referral_state", address)
 
     def raw_user_state(self, address: str) -> dict:
         """Unmodified ``user_state`` payload, for callers that want everything."""
-        return self._call(self._info.user_state, address)
+        return self._call("user_state", address)
 
     # -- live streaming (opens its own websocket) ------------------------
 

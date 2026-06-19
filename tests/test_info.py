@@ -133,6 +133,55 @@ class TestConstruction(unittest.TestCase):
         hl = make_hl(rate_limit_per_min=60)
         self.assertIsNot(hl._lock, hl._rate_lock)
 
+    def test_api_url_override(self):
+        with mock.patch("hl_read.info.Info"):
+            hl = HLRead(api_url="https://proxy.example")
+        self.assertEqual(hl.base_url, "https://proxy.example")
+        self.assertEqual(hl._urls, ["https://proxy.example"])
+
+    def test_default_single_host(self):
+        hl = make_hl()
+        self.assertEqual(len(hl._urls), 1)
+
+
+class TestFailover(unittest.TestCase):
+    def test_failover_to_fallback_host(self):
+        info_a = mock.MagicMock()
+        info_a.all_mids.side_effect = Timeout("host A down")
+        info_b = mock.MagicMock()
+        info_b.all_mids.return_value = {"BTC": "1"}
+        with mock.patch("hl_read.info.Info", side_effect=[info_a, info_b]):
+            hl = HLRead(api_url="https://a", fallback_urls=["https://b"],
+                        max_retries=1, backoff_base=0.0)
+            with mock.patch("hl_read.info.time.sleep"):
+                out = hl._call("all_mids")
+        self.assertEqual(out, {"BTC": "1"})    # succeeded on the fallback
+        self.assertEqual(hl.base_url, "https://b")  # switched host
+
+    def test_construct_fails_over_when_primary_unreachable(self):
+        # The SDK Info() constructor hits the network, so a down primary must
+        # fall over at construction time, not only on later reads.
+        info_b = mock.MagicMock()
+        with mock.patch("hl_read.info.Info", side_effect=[ConnectionError("dns"), info_b]):
+            hl = HLRead(api_url="https://bad", fallback_urls=["https://good"])
+        self.assertEqual(hl.base_url, "https://good")
+        self.assertIs(hl._info, info_b)
+
+    def test_construct_raises_when_all_hosts_down(self):
+        with mock.patch("hl_read.info.Info", side_effect=ConnectionError("dns")):
+            with self.assertRaises(HLReadError):
+                HLRead(api_url="https://bad", fallback_urls=["https://also-bad"])
+
+    def test_no_failover_when_single_host(self):
+        info_a = mock.MagicMock()
+        info_a.all_mids.side_effect = Timeout("down")
+        with mock.patch("hl_read.info.Info", side_effect=[info_a]):
+            hl = HLRead(api_url="https://a", max_retries=1, backoff_base=0.0)
+            with mock.patch("hl_read.info.time.sleep"):
+                with self.assertRaises(HLReadError):
+                    hl._call("all_mids")
+        self.assertEqual(hl.base_url, "https://a")
+
 
 class TestHealth(unittest.TestCase):
     def _hl_with(self, fake):

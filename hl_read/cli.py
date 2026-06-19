@@ -516,6 +516,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="cap HTTP calls to at most N per minute")
     p.add_argument("--no-cache", action="store_true", dest="no_cache",
                    help="always fetch fresh (disable the short market-data cache)")
+    p.add_argument("--api-url", dest="api_url", default=None,
+                   help="override the API endpoint (e.g. a proxy/mirror)")
+    p.add_argument("--fallback-url", dest="fallback_urls", action="append",
+                   help="fallback endpoint, tried on persistent failure; repeatable")
     sub = p.add_subparsers(dest="command", required=True)
 
     sp = sub.add_parser("mids", help="mid prices")
@@ -606,6 +610,8 @@ def main(argv=None) -> int:
         rate_limit_per_min=args.rate_limit,
         cache_ttl=0.0 if args.no_cache else 1.0,
         meta_ttl=0.0 if args.no_cache else 300.0,
+        api_url=args.api_url,
+        fallback_urls=args.fallback_urls,
     )
     try:
         rc = args.func(hl, args)
