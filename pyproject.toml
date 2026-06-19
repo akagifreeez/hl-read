@@ -9,7 +9,7 @@ description = "Key-free, read-only toolkit for Hyperliquid - library, CLI, and M
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "Koki Yonai", email = "akagifreeezworks@gmail.com" }]
+authors = [{ name = "akagifreeez", email = "akagifreeezworks@gmail.com" }]
 keywords = ["hyperliquid", "crypto", "trading", "mcp", "read-only", "defi", "perpetuals"]
 classifiers = [
     "Development Status :: 4 - Beta",

@@ -125,4 +125,4 @@ cache, and parsing logic deterministically without touching the network.
 
 ## License
 
-MIT © Koki Yonai. Not affiliated with Hyperliquid. Public market data only; nothing here is financial advice.
+MIT © akagifreeez. Not affiliated with Hyperliquid. Public market data only; nothing here is financial advice.
