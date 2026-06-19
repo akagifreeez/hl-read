@@ -185,6 +185,23 @@ class TestParsing(unittest.TestCase):
         self.assertEqual(rows[0]["quote"], "USDC")
         self.assertEqual(rows[0]["mid"], 0.25)
 
+    def test_portfolio(self):
+        fake = mock.MagicMock()
+        fake.portfolio.return_value = [
+            ["day", {"accountValueHistory": [[1, "100"], [2, "110"]],
+                     "pnlHistory": [[1, "0"], [2, "10"]], "vlm": "5000"}],
+            ["allTime", {"accountValueHistory": [], "pnlHistory": [], "vlm": "0"}],
+        ]
+        p = self._hl_with(fake).portfolio("0xabc")
+        self.assertEqual(p["address"], "0xabc")
+        d = p["periods"]["day"]
+        self.assertEqual(d["account_value_history"][0], {"time": 1, "value": 100.0})
+        self.assertEqual(d["start_value"], 100.0)
+        self.assertEqual(d["end_value"], 110.0)
+        self.assertEqual(d["period_pnl"], 10.0)
+        self.assertEqual(d["vlm"], 5000.0)
+        self.assertIsNone(p["periods"]["allTime"]["end_value"])
+
     def test_predicted_fundings(self):
         fake = mock.MagicMock()
         fake.post.return_value = [

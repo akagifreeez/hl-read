@@ -31,7 +31,7 @@
 ## バックログ（上から順に。各行1反復）
 
 - [x] **1. predicted_fundings()** — 全コイン予測funding（他venue比較含む）。lib + CLI `predicted` + MCP `get_predicted_fundings` + test + 検証 + commit/push ✅
-- [ ] **2. portfolio(addr)** — アカウント価値/PnL時系列(day/week/month/all)。lib + CLI `portfolio <addr>` + MCP `get_portfolio` + test + 検証 + commit/push
+- [x] **2. portfolio(addr)** — アカウント価値/PnL時系列(day/week/month/all)。lib + CLI `portfolio <addr>` + MCP `get_portfolio` + test + 検証 + commit/push ✅
 - [ ] **3. fills_by_time(addr, since, until)** — 期間指定約定。lib + CLI `fills` に `--since/--until` + MCP `get_fills_by_time` + test + 検証 + commit/push
 - [ ] **4. ledger(addr)** — 入出金/送金履歴(non-funding ledger)。lib + CLI `ledger <addr>` + MCP `get_ledger` + test + 検証 + commit/push
 - [ ] **5. 出力形式** — 全CLIに `--format table|json|csv|ndjson` ＋ `export` サブコマンド（fills/ledger/candles→ファイル）+ test + commit/push
@@ -43,3 +43,4 @@
 
 ## 進捗ログ（反復ごとに1行追記）
 - 反復1 ✅ predicted_fundings: lib/CLI(`predicted`)/MCP(get_predicted_fundings→計12ツール)/test(17/17緑)。ライブ確認=230コイン・BTC HL+0.0013%/1h vs Bin/Bybit。不変条件grep OK。
+- 反復2 ✅ portfolio: lib/CLI(`portfolio`)/MCP(get_portfolio→計13ツール)/test(18/18緑)。ライブ確認=クジラ全8期間PnL(allTime +$4.48M)。不変条件grep OK。

@@ -101,6 +101,17 @@ def get_positions(address: str) -> dict:
 
 
 @mcp.tool()
+def get_portfolio(address: str) -> dict:
+    """Account-value and PnL history for any address across time windows.
+
+    Periods: day/week/month/allTime and their perp-only variants; each has the
+    time series plus a summary (start/end account value, cumulative period PnL,
+    volume). Public data; no key needed.
+    """
+    return hl.portfolio(address)
+
+
+@mcp.tool()
 def get_open_orders(address: str) -> list[dict]:
     """Resting (open) orders for any address."""
     return hl.open_orders(address)

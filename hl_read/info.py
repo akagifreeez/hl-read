@@ -408,6 +408,45 @@ class HLRead:
             )
         return out
 
+    def portfolio(self, address: str) -> dict:
+        """Account-value / PnL history for any address across time windows.
+
+        One entry per period (``day``/``week``/``month``/``allTime`` and their
+        ``perp``-only variants), each with the time series plus a small summary
+        (start/end account value, cumulative period PnL, and volume)::
+
+            {"address": "0x..",
+             "periods": {"day": {"account_value_history": [{"time", "value"}],
+                                 "pnl_history": [{"time", "pnl"}],
+                                 "vlm": float, "start_value": float,
+                                 "end_value": float, "period_pnl": float}, ...}}
+        """
+        raw = self._call(self._info.portfolio, address)
+        periods: dict[str, dict] = {}
+        for entry in raw or []:
+            if not entry or len(entry) < 2:
+                continue
+            name, d = entry[0], (entry[1] or {})
+            avh = [
+                {"time": pt[0], "value": _f(pt[1])}
+                for pt in (d.get("accountValueHistory") or [])
+                if pt and len(pt) >= 2
+            ]
+            pnl = [
+                {"time": pt[0], "pnl": _f(pt[1])}
+                for pt in (d.get("pnlHistory") or [])
+                if pt and len(pt) >= 2
+            ]
+            periods[name] = {
+                "account_value_history": avh,
+                "pnl_history": pnl,
+                "vlm": _f(d.get("vlm")),
+                "start_value": avh[0]["value"] if avh else None,
+                "end_value": avh[-1]["value"] if avh else None,
+                "period_pnl": pnl[-1]["pnl"] if pnl else None,
+            }
+        return {"address": address, "periods": periods}
+
     def spot_balances(self, address: str) -> dict:
         """Spot token balances for any address (public; address only, no key)."""
         st = self._call(self._info.spot_user_state, address)

@@ -28,6 +28,7 @@ hl-read spot                       # every spot pair + mid price
 hl-read spot PURR                  # filter by base coin / pair
 hl-read positions 0xYourAddr...    # anyone's positions (public data)
 hl-read positions 0xYourAddr... --watch    # live, re-polled every few seconds
+hl-read portfolio 0xYourAddr...    # account value / PnL history by period
 hl-read balances 0xYourAddr...     # spot token balances
 hl-read orders 0xYourAddr...       # resting orders
 hl-read fills 0xYourAddr... --limit 20
@@ -49,6 +50,7 @@ hl = HLRead()                     # mainnet; HLRead(testnet=True) for testnet
 hl.mids()["BTC"]                  # current mid price
 hl.book("ETH", depth=5)           # {"bids": [...], "asks": [...], "mid": ..., "spread": ...}
 hl.positions("0xabc...")          # account value + open positions for any address
+hl.portfolio("0xabc...")          # account-value / PnL history by period (day..allTime)
 hl.funding()                      # funding / mark / oracle / OI per market
 hl.predicted_fundings()           # predicted funding per coin across venues (HL + CEXes)
 hl.fills("0xabc...", limit=20)    # recent fills
@@ -103,7 +105,7 @@ HL_READ_TESTNET=1 hl-read-mcp     # testnet
 claude mcp add hl-read -- hl-read-mcp
 ```
 
-Tools exposed to the model (12): `list_markets`, `get_mids`, `get_book`, `get_funding`, `get_funding_history`, `get_predicted_fundings`, `get_positions`, `get_open_orders`, `get_fills`, `get_candles`, `get_spot_markets`, `get_spot_balances`. None of them can place an order.
+Tools exposed to the model (13): `list_markets`, `get_mids`, `get_book`, `get_funding`, `get_funding_history`, `get_predicted_fundings`, `get_positions`, `get_portfolio`, `get_open_orders`, `get_fills`, `get_candles`, `get_spot_markets`, `get_spot_balances`. None of them can place an order.
 
 > Ask Claude: *"What's the funding on the top 5 Hyperliquid perps right now, and what's 0xabc…'s open position on the highest one?"* — it answers using only public reads.
 

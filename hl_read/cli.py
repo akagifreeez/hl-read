@@ -5,6 +5,7 @@
     hl-read book ETH --depth 5       # order book snapshot
     hl-read positions 0xABC...       # anyone's positions (public)
     hl-read positions 0xABC... --watch   # live, re-polled every few seconds
+    hl-read portfolio 0xABC...       # account value / PnL history by period
     hl-read orders 0xABC...          # resting orders
     hl-read fills 0xABC... --limit 20
     hl-read funding                  # funding / OI table, sorted by |funding|
@@ -142,6 +143,26 @@ def cmd_positions(hl: HLRead, args) -> None:
             time.sleep(interval)
     except KeyboardInterrupt:
         pass
+
+
+def cmd_portfolio(hl: HLRead, args) -> None:
+    p = hl.portfolio(args.address)
+    if args.json:
+        return _emit(p, True)
+    print(f"  portfolio   {p['address']}")
+    if not p["periods"]:
+        print("    (no history)")
+        return
+    print(f"    {'period':<12}{'acct value':>16}{'PnL':>16}{'volume':>18}")
+    for name, d in p["periods"].items():
+        ev, pnl, vlm = d["end_value"], d["period_pnl"], d["vlm"]
+        ev_s = "n/a" if ev is None else f"{ev:,.2f}"
+        if pnl is None:
+            pnl_s, col = "n/a", ""
+        else:
+            pnl_s, col = f"{pnl:+,.2f}", (GREEN if pnl >= 0 else RED)
+        vlm_s = "n/a" if vlm is None else f"{vlm:,.0f}"
+        print(f"    {name:<12}{ev_s:>16}{col}{pnl_s:>16}{RESET}{vlm_s:>18}")
 
 
 def cmd_balances(hl: HLRead, args) -> None:
@@ -329,6 +350,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--watch", action="store_true", help="live: re-poll and redraw")
     sp.add_argument("--interval", type=float, default=3.0, help="poll seconds when --watch")
     sp.set_defaults(func=cmd_positions)
+
+    sp = sub.add_parser("portfolio", help="account value / PnL history for an address")
+    sp.add_argument("address")
+    sp.set_defaults(func=cmd_portfolio)
 
     sp = sub.add_parser("balances", help="spot token balances for an address")
     sp.add_argument("address")
