@@ -80,6 +80,21 @@ def get_funding_history(coin: str, hours: float = 24) -> list[dict]:
 
 
 @mcp.tool()
+def get_predicted_fundings(coins: list[str] | None = None) -> list[dict]:
+    """Predicted upcoming funding per coin across venues (Hyperliquid vs Binance/Bybit/etc.).
+
+    Each row is {coin, venues:[{venue, funding_rate, next_funding_time, funding_interval_hours}]}.
+    Rates are per each venue's own interval (HL hourly, CEXes 4-8h) - normalize before comparing.
+    Pass a list of coins to filter, or omit for all.
+    """
+    rows = hl.predicted_fundings()
+    if coins:
+        wanted = {c.upper() for c in coins}
+        rows = [r for r in rows if (r["coin"] or "").upper() in wanted]
+    return rows
+
+
+@mcp.tool()
 def get_positions(address: str) -> dict:
     """Open perp positions and account value for any address (public data; no key needed)."""
     return hl.positions(address)

@@ -328,6 +328,45 @@ class HLRead:
         """Historical funding rates for one market over the last ``hours``."""
         return self._call(self._info.funding_history, coin.upper(), _ms_ago(hours=hours))
 
+    def predicted_fundings(self) -> list[dict]:
+        """Predicted upcoming funding per coin across venues (Hyperliquid + CEXes).
+
+        One row per coin with a list of per-venue predictions, so you can
+        compare Hyperliquid's predicted funding against Binance/Bybit/etc.
+        Rates are per the venue's own ``funding_interval_hours`` (HL is hourly,
+        most CEXes are 4-8h), so normalize before comparing magnitudes::
+
+            [{"coin": "BTC",
+              "venues": [{"venue": "HlPerp", "funding_rate": 0.0000125,
+                          "next_funding_time": 1781848800000,
+                          "funding_interval_hours": 1}, ...]}, ...]
+        """
+        raw = self._cached(
+            "predicted_fundings",
+            self.cache_ttl,
+            lambda: self._call(self._info.post, "/info", {"type": "predictedFundings"}),
+        )
+        out: list[dict] = []
+        for entry in raw or []:
+            if not entry or len(entry) < 2:
+                continue
+            coin, venues_raw = entry[0], entry[1] or []
+            venues = []
+            for v in venues_raw:
+                if not v or len(v) < 2:
+                    continue
+                name, d = v[0], (v[1] or {})
+                venues.append(
+                    {
+                        "venue": name,
+                        "funding_rate": _f(d.get("fundingRate")),
+                        "next_funding_time": d.get("nextFundingTime"),
+                        "funding_interval_hours": d.get("fundingIntervalHours"),
+                    }
+                )
+            out.append({"coin": coin, "venues": venues})
+        return out
+
     def candles(self, coin: str, interval: str = "1h", hours: float = 24) -> list[dict]:
         """OHLC candles for one market. ``interval`` e.g. 1m/15m/1h/4h/1d."""
         return self._call(

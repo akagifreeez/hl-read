@@ -185,6 +185,27 @@ class TestParsing(unittest.TestCase):
         self.assertEqual(rows[0]["quote"], "USDC")
         self.assertEqual(rows[0]["mid"], 0.25)
 
+    def test_predicted_fundings(self):
+        fake = mock.MagicMock()
+        fake.post.return_value = [
+            ["BTC", [
+                ["HlPerp", {"fundingRate": "0.0001", "nextFundingTime": 123, "fundingIntervalHours": 1}],
+                ["BinPerp", {"fundingRate": "-0.0002", "nextFundingTime": 456, "fundingIntervalHours": 8}],
+            ]],
+            ["ETH", [
+                ["HlPerp", {"fundingRate": "0.00005", "nextFundingTime": 789, "fundingIntervalHours": 1}],
+            ]],
+            ["BADCOIN", []],   # tolerate a coin with no venues
+        ]
+        rows = self._hl_with(fake).predicted_fundings()
+        self.assertEqual(rows[0]["coin"], "BTC")
+        self.assertEqual(rows[0]["venues"][0]["venue"], "HlPerp")
+        self.assertEqual(rows[0]["venues"][0]["funding_rate"], 0.0001)
+        self.assertEqual(rows[0]["venues"][0]["funding_interval_hours"], 1)
+        self.assertEqual(rows[0]["venues"][1]["venue"], "BinPerp")
+        self.assertEqual(rows[1]["coin"], "ETH")
+        self.assertEqual(rows[2]["venues"], [])
+
     def test_spot_balances(self):
         fake = mock.MagicMock()
         fake.spot_user_state.return_value = {

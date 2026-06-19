@@ -8,6 +8,7 @@
     hl-read orders 0xABC...          # resting orders
     hl-read fills 0xABC... --limit 20
     hl-read funding                  # funding / OI table, sorted by |funding|
+    hl-read predicted BTC ETH        # predicted funding across venues (HL vs CEXes)
     hl-read markets                  # every perp + max leverage
     hl-read spot                     # every spot pair + mid price
     hl-read balances 0xABC...        # spot token balances
@@ -219,6 +220,40 @@ def cmd_funding(hl: HLRead, args) -> None:
         )
 
 
+def _hl_venue_rate(row: dict):
+    """The HlPerp predicted rate for a coin row, or None if absent."""
+    for v in row["venues"]:
+        if v["venue"] == "HlPerp":
+            return v["funding_rate"]
+    return None
+
+
+def cmd_predicted(hl: HLRead, args) -> None:
+    rows = hl.predicted_fundings()
+    if args.coins:
+        wanted = {c.upper() for c in args.coins}
+        rows = [r for r in rows if (r["coin"] or "").upper() in wanted]
+    if args.json:
+        return _emit(rows, True)
+    # Sort by |Hyperliquid predicted funding| so the spiciest markets surface.
+    rows.sort(key=lambda r: abs(_hl_venue_rate(r) or 0), reverse=True)
+    shown = rows[: args.top] if args.top else rows
+    print(f"  predicted funding - {len(rows)} coins (sorted by |HlPerp|)")
+    for r in shown:
+        print(f"  {BOLD}{r['coin']}{RESET}")
+        for v in r["venues"]:
+            rate = v["funding_rate"]
+            if rate is None:
+                rate_s = "n/a"
+                col = ""
+            else:
+                rate_s = f"{rate * 100:+.4f}%"
+                col = GREEN if rate >= 0 else RED
+            iv = v["funding_interval_hours"]
+            iv_s = f"/{iv}h" if iv is not None else ""
+            print(f"    {v['venue']:<10}{col}{rate_s:>11}{RESET} {DIM}{iv_s:<4}{RESET}")
+
+
 def cmd_markets(hl: HLRead, args) -> None:
     m = hl.markets()
     if args.json:
@@ -312,6 +347,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("coins", nargs="*", help="optional coins to filter")
     sp.add_argument("--top", type=int, default=0, help="show only the top N by |funding|")
     sp.set_defaults(func=cmd_funding)
+
+    sp = sub.add_parser("predicted", help="predicted funding per coin across venues (HL vs CEXes)")
+    sp.add_argument("coins", nargs="*", help="optional coins to filter")
+    sp.add_argument("--top", type=int, default=0, help="show only the top N by |HlPerp funding|")
+    sp.set_defaults(func=cmd_predicted)
 
     sp = sub.add_parser("markets", help="list perp markets")
     sp.set_defaults(func=cmd_markets)
