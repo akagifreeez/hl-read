@@ -6,5 +6,5 @@ incapable of placing orders or moving funds. Use it as a library, a CLI
 """
 from .info import HLRead, HLReadError, ResilientStream
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = ["HLRead", "HLReadError", "ResilientStream", "__version__"]
