@@ -33,7 +33,7 @@
 - [x] **1. predicted_fundings()** — 全コイン予測funding（他venue比較含む）。lib + CLI `predicted` + MCP `get_predicted_fundings` + test + 検証 + commit/push ✅
 - [x] **2. portfolio(addr)** — アカウント価値/PnL時系列(day/week/month/all)。lib + CLI `portfolio <addr>` + MCP `get_portfolio` + test + 検証 + commit/push ✅
 - [x] **3. fills_by_time(addr, since, until)** — 期間指定約定。lib + CLI `fills` に `--since/--until` + MCP `get_fills_by_time` + test + 検証 + commit/push ✅
-- [ ] **4. ledger(addr)** — 入出金/送金履歴(non-funding ledger)。lib + CLI `ledger <addr>` + MCP `get_ledger` + test + 検証 + commit/push
+- [x] **4. ledger(addr)** — 入出金/送金履歴(non-funding ledger)。lib + CLI `ledger <addr>` + MCP `get_ledger` + test + 検証 + commit/push ✅
 - [ ] **5. 出力形式** — 全CLIに `--format table|json|csv|ndjson` ＋ `export` サブコマンド（fills/ledger/candles→ファイル）+ test + commit/push
 - [ ] **6. wrap-up** — version 0.3.0 / README のMCPツール数・機能一覧更新 / 全テスト緑の最終確認 / memory(hl-read-toolkit.md) 更新 / 最終 commit/push → **ループ停止**
 
@@ -45,3 +45,4 @@
 - 反復1 ✅ predicted_fundings: lib/CLI(`predicted`)/MCP(get_predicted_fundings→計12ツール)/test(17/17緑)。ライブ確認=230コイン・BTC HL+0.0013%/1h vs Bin/Bybit。不変条件grep OK。
 - 反復2 ✅ portfolio: lib/CLI(`portfolio`)/MCP(get_portfolio→計13ツール)/test(18/18緑)。ライブ確認=クジラ全8期間PnL(allTime +$4.48M)。不変条件grep OK。
 - 反復3 ✅ fills_by_time: lib + CLI(`fills --since/--until`、時刻パーサ24h/7d/ISO/ms)/MCP(get_fills_by_time→計14ツール)/test(20/20緑)。ライブ確認=30日窓・新しい順表示。不変条件grep OK。
+- 反復4 ✅ ledger: lib(usdc抽出+raw delta保持) + CLI(`ledger --since/--until/--limit`、--limit 0=全件)/MCP(get_ledger→計15ツール)/test(21/21緑)。ライブ確認=2000件・新しい順。不変条件grep OK。hl-tax-jpの土台完成。

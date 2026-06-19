@@ -29,6 +29,7 @@ hl-read spot PURR                  # filter by base coin / pair
 hl-read positions 0xYourAddr...    # anyone's positions (public data)
 hl-read positions 0xYourAddr... --watch    # live, re-polled every few seconds
 hl-read portfolio 0xYourAddr...    # account value / PnL history by period
+hl-read ledger 0xYourAddr...       # deposits / withdrawals / transfers (--since, --limit 0 = all)
 hl-read balances 0xYourAddr...     # spot token balances
 hl-read orders 0xYourAddr...       # resting orders
 hl-read fills 0xYourAddr... --limit 20
@@ -56,6 +57,7 @@ hl.funding()                      # funding / mark / oracle / OI per market
 hl.predicted_fundings()           # predicted funding per coin across venues (HL + CEXes)
 hl.fills("0xabc...", limit=20)    # recent fills
 hl.fills_by_time("0xabc...", start_ms, end_ms)   # fills within an epoch-ms window
+hl.ledger("0xabc...")             # deposits/withdrawals/transfers (non-funding ledger)
 hl.spot_markets()                 # spot pairs: name, base/quote token, mid
 hl.spot_balances("0xabc...")      # spot token balances for any address
 
@@ -107,7 +109,7 @@ HL_READ_TESTNET=1 hl-read-mcp     # testnet
 claude mcp add hl-read -- hl-read-mcp
 ```
 
-Tools exposed to the model (14): `list_markets`, `get_mids`, `get_book`, `get_funding`, `get_funding_history`, `get_predicted_fundings`, `get_positions`, `get_portfolio`, `get_open_orders`, `get_fills`, `get_fills_by_time`, `get_candles`, `get_spot_markets`, `get_spot_balances`. None of them can place an order.
+Tools exposed to the model (15): `list_markets`, `get_mids`, `get_book`, `get_funding`, `get_funding_history`, `get_predicted_fundings`, `get_positions`, `get_portfolio`, `get_open_orders`, `get_ledger`, `get_fills`, `get_fills_by_time`, `get_candles`, `get_spot_markets`, `get_spot_balances`. None of them can place an order.
 
 > Ask Claude: *"What's the funding on the top 5 Hyperliquid perps right now, and what's 0xabc…'s open position on the highest one?"* — it answers using only public reads.
 

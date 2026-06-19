@@ -6,6 +6,7 @@
     hl-read positions 0xABC...       # anyone's positions (public)
     hl-read positions 0xABC... --watch   # live, re-polled every few seconds
     hl-read portfolio 0xABC...       # account value / PnL history by period
+    hl-read ledger 0xABC...          # deposits / withdrawals / transfers
     hl-read orders 0xABC...          # resting orders
     hl-read fills 0xABC... --limit 20
     hl-read fills 0xABC... --since 7d        # fills in a time window (e.g. last 7 days)
@@ -160,6 +161,28 @@ def cmd_positions(hl: HLRead, args) -> None:
             time.sleep(interval)
     except KeyboardInterrupt:
         pass
+
+
+def cmd_ledger(hl: HLRead, args) -> None:
+    start = _parse_when(args.since) if args.since else 0
+    end = _parse_when(args.until) if args.until else None
+    rows = hl.ledger(args.address, start, end)
+    rows.sort(key=lambda r: r.get("time") or 0, reverse=True)  # newest first
+    total = len(rows)
+    if args.limit:
+        rows = rows[: args.limit]
+    if args.json:
+        return _emit(rows, True)
+    if not rows:
+        print("  ledger        : none in window")
+        return
+    extra = f", showing newest {len(rows)}" if len(rows) < total else ""
+    print(f"  ledger   {args.address}   ({total} updates{extra})")
+    print(f"    {'time':<20}{'type':<22}{'usdc':>16}")
+    for r in rows:
+        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime((r["time"] or 0) / 1000))
+        usdc_s = "" if r["usdc"] is None else f"{r['usdc']:,.2f}"
+        print(f"    {ts:<20}{(r['type'] or ''):<22}{usdc_s:>16}")
 
 
 def cmd_portfolio(hl: HLRead, args) -> None:
@@ -379,6 +402,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("portfolio", help="account value / PnL history for an address")
     sp.add_argument("address")
     sp.set_defaults(func=cmd_portfolio)
+
+    sp = sub.add_parser("ledger", help="deposits/withdrawals/transfers for an address")
+    sp.add_argument("address")
+    sp.add_argument("--limit", type=int, default=50, help="show newest N (0 = all, for export)")
+    sp.add_argument("--since", help="window start: 24h / 7d (ago), 2024-01-31, or epoch ms (default all)")
+    sp.add_argument("--until", help="window end (default now): same formats as --since")
+    sp.set_defaults(func=cmd_ledger)
 
     sp = sub.add_parser("balances", help="spot token balances for an address")
     sp.add_argument("address")

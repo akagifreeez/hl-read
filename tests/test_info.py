@@ -185,6 +185,19 @@ class TestParsing(unittest.TestCase):
         self.assertEqual(rows[0]["quote"], "USDC")
         self.assertEqual(rows[0]["mid"], 0.25)
 
+    def test_ledger(self):
+        fake = mock.MagicMock()
+        fake.user_non_funding_ledger_updates.return_value = [
+            {"time": 100, "hash": "0xh", "delta": {"type": "deposit", "usdc": "250.5", "fee": "0"}},
+            {"time": 200, "hash": "0xj", "delta": {"type": "withdraw"}},  # no usdc field
+        ]
+        out = self._hl_with(fake).ledger("0xabc", 0)
+        self.assertEqual(out[0]["type"], "deposit")
+        self.assertEqual(out[0]["usdc"], 250.5)
+        self.assertEqual(out[0]["delta"]["fee"], "0")  # raw delta preserved
+        self.assertIsNone(out[1]["usdc"])
+        fake.user_non_funding_ledger_updates.assert_called_once_with("0xabc", 0, None)
+
     def test_fills_by_time(self):
         fake = mock.MagicMock()
         fake.user_fills_by_time.return_value = [

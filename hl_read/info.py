@@ -488,6 +488,39 @@ class HLRead:
             aggregate,
         )
 
+    def ledger(self, address: str, start_ms: int = 0, end_ms: Optional[int] = None) -> list[dict]:
+        """Non-funding ledger updates for any address within a time window (epoch ms).
+
+        Covers deposits, withdrawals, transfers, and vault moves - everything
+        except funding payments (use ``user_funding`` for those). ``start_ms`` 0
+        means from the beginning; ``end_ms`` defaults to now. The API pages at
+        2000 updates per call, so narrow the window for very active accounts.
+
+        Each row keeps the raw ``delta`` and surfaces ``time``/``type``/``usdc``::
+
+            [{"time": int, "hash": str, "type": "deposit",
+              "usdc": 250.5, "delta": {...full raw delta...}}, ...]
+        """
+        raw = self._call(
+            self._info.user_non_funding_ledger_updates,
+            address,
+            int(start_ms),
+            int(end_ms) if end_ms is not None else None,
+        )
+        out: list[dict] = []
+        for u in raw or []:
+            d = u.get("delta") or {}
+            out.append(
+                {
+                    "time": u.get("time"),
+                    "hash": u.get("hash"),
+                    "type": d.get("type"),
+                    "usdc": _f(d.get("usdc")),
+                    "delta": d,
+                }
+            )
+        return out
+
     def user_funding(self, address: str, days: float = 30) -> list[dict]:
         """Funding payments received/paid by an address over the last ``days``."""
         return self._call(self._info.user_funding_history, address, _ms_ago(days=days))

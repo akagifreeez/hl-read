@@ -118,6 +118,17 @@ def get_open_orders(address: str) -> list[dict]:
 
 
 @mcp.tool()
+def get_ledger(address: str, start_ms: int = 0, end_ms: int | None = None) -> list[dict]:
+    """Non-funding ledger updates (deposits, withdrawals, transfers, vault moves) for any address.
+
+    Window is [start_ms, end_ms] in epoch milliseconds; start_ms 0 = from the
+    beginning, end_ms omitted = up to now. Each row surfaces time/type/usdc and
+    keeps the raw delta. API pages at 2000. Public data; no key needed.
+    """
+    return hl.ledger(address, start_ms, end_ms)
+
+
+@mcp.tool()
 def get_fills(address: str, limit: int = 50) -> list[dict]:
     """Recent fills for any address, most recent first (capped at `limit`)."""
     return hl.fills(address, limit=limit)
