@@ -8,6 +8,7 @@
     hl-read portfolio 0xABC...       # account value / PnL history by period
     hl-read orders 0xABC...          # resting orders
     hl-read fills 0xABC... --limit 20
+    hl-read fills 0xABC... --since 7d        # fills in a time window (e.g. last 7 days)
     hl-read funding                  # funding / OI table, sorted by |funding|
     hl-read predicted BTC ETH        # predicted funding across venues (HL vs CEXes)
     hl-read markets                  # every perp + max leverage
@@ -66,6 +67,22 @@ def _clear() -> None:
 def _emit(obj, as_json: bool) -> None:
     if as_json:
         print(json.dumps(obj, indent=2))
+
+
+def _parse_when(s: str) -> int:
+    """Parse a time spec to epoch ms: '24h'/'7d' (ago), 'YYYY-MM-DD', or raw ms."""
+    import re
+
+    s = s.strip()
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)([hd])", s)
+    if m:
+        secs = float(m.group(1)) * (3600 if m.group(2) == "h" else 86400)
+        return int((time.time() - secs) * 1000)
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s):
+        return int(time.mktime(time.strptime(s, "%Y-%m-%d")) * 1000)  # local midnight
+    if s.isdigit():
+        return int(s)
+    raise ValueError(f"bad time '{s}' (use e.g. 24h, 7d, 2024-01-31, or epoch ms)")
 
 
 # -- commands ------------------------------------------------------------
@@ -206,7 +223,15 @@ def cmd_orders(hl: HLRead, args) -> None:
 
 
 def cmd_fills(hl: HLRead, args) -> None:
-    fills = hl.fills(args.address, limit=args.limit)
+    if getattr(args, "since", None):
+        start = _parse_when(args.since)
+        end = _parse_when(args.until) if getattr(args, "until", None) else None
+        fills = hl.fills_by_time(args.address, start, end)
+        fills.sort(key=lambda f: f.get("time", 0), reverse=True)  # newest first, like `fills`
+        if args.limit:
+            fills = fills[: args.limit]
+    else:
+        fills = hl.fills(args.address, limit=args.limit)
     if args.json:
         return _emit(fills, True)
     if not fills:
@@ -363,9 +388,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("address")
     sp.set_defaults(func=cmd_orders)
 
-    sp = sub.add_parser("fills", help="recent fills for an address")
+    sp = sub.add_parser("fills", help="fills for an address (recent, or a time window)")
     sp.add_argument("address")
     sp.add_argument("--limit", type=int, default=50)
+    sp.add_argument("--since", help="window start: 24h / 7d (ago), 2024-01-31, or epoch ms")
+    sp.add_argument("--until", help="window end (default now): same formats as --since")
     sp.set_defaults(func=cmd_fills)
 
     sp = sub.add_parser("funding", help="funding / OI table")

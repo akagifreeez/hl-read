@@ -124,6 +124,17 @@ def get_fills(address: str, limit: int = 50) -> list[dict]:
 
 
 @mcp.tool()
+def get_fills_by_time(address: str, start_ms: int, end_ms: int | None = None, aggregate: bool = False) -> list[dict]:
+    """Fills for any address within a time window [start_ms, end_ms] in epoch milliseconds.
+
+    Omit `end_ms` for "up to now". Set `aggregate` to combine partial fills of one
+    crossing order. The API pages at 2000 fills/call - narrow the window if needed.
+    Public data; no key needed.
+    """
+    return hl.fills_by_time(address, start_ms, end_ms, aggregate=aggregate)
+
+
+@mcp.tool()
 def get_candles(coin: str, interval: str = "1h", hours: float = 24) -> list[dict]:
     """OHLC candles for one market. interval e.g. 1m/15m/1h/4h/1d; lookback `hours`."""
     return hl.candles(coin, interval=interval, hours=hours)

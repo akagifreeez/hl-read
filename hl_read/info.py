@@ -471,6 +471,23 @@ class HLRead:
         f = self._call(self._info.user_fills, address)
         return f[:limit] if limit else f
 
+    def fills_by_time(
+        self, address: str, start_ms: int, end_ms: Optional[int] = None, *, aggregate: bool = False
+    ) -> list[dict]:
+        """Fills for an address within a time window (epoch milliseconds).
+
+        ``end_ms`` defaults to now. Set ``aggregate`` to combine the partial
+        fills of a single crossing order. The API pages at 2000 fills per call,
+        so narrow the window if you hit that. Window-bounded, hence no ``limit``.
+        """
+        return self._call(
+            self._info.user_fills_by_time,
+            address,
+            int(start_ms),
+            int(end_ms) if end_ms is not None else None,
+            aggregate,
+        )
+
     def user_funding(self, address: str, days: float = 30) -> list[dict]:
         """Funding payments received/paid by an address over the last ``days``."""
         return self._call(self._info.user_funding_history, address, _ms_ago(days=days))

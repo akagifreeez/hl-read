@@ -185,6 +185,21 @@ class TestParsing(unittest.TestCase):
         self.assertEqual(rows[0]["quote"], "USDC")
         self.assertEqual(rows[0]["mid"], 0.25)
 
+    def test_fills_by_time(self):
+        fake = mock.MagicMock()
+        fake.user_fills_by_time.return_value = [
+            {"coin": "BTC", "time": 100, "px": "60000", "sz": "0.1", "dir": "Open Long", "closedPnl": "0"},
+        ]
+        out = self._hl_with(fake).fills_by_time("0xabc", 50, 200)
+        self.assertEqual(out[0]["coin"], "BTC")
+        fake.user_fills_by_time.assert_called_once_with("0xabc", 50, 200, False)
+
+    def test_fills_by_time_default_end(self):
+        fake = mock.MagicMock()
+        fake.user_fills_by_time.return_value = []
+        self._hl_with(fake).fills_by_time("0xabc", 50)
+        fake.user_fills_by_time.assert_called_once_with("0xabc", 50, None, False)
+
     def test_portfolio(self):
         fake = mock.MagicMock()
         fake.portfolio.return_value = [
