@@ -16,9 +16,11 @@
     hl-read spot                     # every spot pair + mid price
     hl-read balances 0xABC...        # spot token balances
     hl-read watch ETH                # live order book over websocket
+    hl-read --format csv fills 0xABC... --since 30d   # any list command as CSV
+    hl-read export ledger 0xABC... --out ledger.csv   # write straight to a UTF-8 file
 
-Global flags: --testnet (testnet API), --json (raw JSON), --retries N,
---rate-limit N (max HTTP calls/min), --no-cache (always fetch fresh).
+Global flags: --testnet (testnet API), --json (raw JSON), --format table|json|csv|ndjson,
+--retries N, --rate-limit N (max HTTP calls/min), --no-cache (always fetch fresh).
 No private key is ever read or accepted.
 """
 from __future__ import annotations
@@ -65,9 +67,54 @@ def _clear() -> None:
         os.system("cls" if os.name == "nt" else "clear")
 
 
-def _emit(obj, as_json: bool) -> None:
-    if as_json:
-        print(json.dumps(obj, indent=2))
+def _fmt(args) -> str:
+    """Resolve the output format. ``--json`` is a back-compat alias for json."""
+    if getattr(args, "json", False):
+        return "json"
+    return getattr(args, "format", "table") or "table"
+
+
+def _csv_cell(v):
+    """CSV-safe cell: JSON-encode nested structures, blank for None."""
+    if isinstance(v, (dict, list)):
+        return json.dumps(v, ensure_ascii=False)
+    return "" if v is None else v
+
+
+def _write_csv(rows: list, fh) -> None:
+    """Write a list of flat dicts as CSV. Columns come from the first row."""
+    if not rows:
+        return
+    import csv as _csv
+
+    cols = list(rows[0].keys())
+    w = _csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore")
+    w.writeheader()
+    for r in rows:
+        w.writerow({c: _csv_cell(r.get(c)) for c in cols})
+
+
+def _emit_data(args, native, rows=None) -> bool:
+    """Emit ``native``/``rows`` in the requested non-table format.
+
+    Returns True if it produced output (json/csv/ndjson); False for ``table``
+    so the caller renders its own table. ``native`` is what ``--json`` emits
+    (kept byte-for-byte compatible); ``rows`` is the flat list-of-dicts used for
+    csv/ndjson, falling back to ``native`` when it is already a list.
+    """
+    fmt = _fmt(args)
+    if fmt == "table":
+        return False
+    if fmt == "json":
+        print(json.dumps(native, indent=2))
+        return True
+    data = rows if rows is not None else (native if isinstance(native, list) else [native])
+    if fmt == "ndjson":
+        for r in data:
+            print(json.dumps(r, ensure_ascii=False))
+    else:  # csv
+        _write_csv(data, sys.stdout)
+    return True
 
 
 def _parse_when(s: str) -> int:
@@ -93,8 +140,9 @@ def cmd_mids(hl: HLRead, args) -> None:
     mids = hl.mids()
     if args.coins:
         mids = {c.upper(): mids.get(c.upper()) for c in args.coins}
-    if args.json:
-        return _emit(mids, True)
+    rows = [{"coin": c, "mid": px} for c, px in sorted(mids.items(), key=lambda kv: kv[0])]
+    if _emit_data(args, mids, rows):
+        return
     for coin, px in sorted(mids.items(), key=lambda kv: kv[0]):
         px_s = "n/a" if px is None else f"{px:,.6g}"
         print(f"  {coin:<10} {px_s:>16}")
@@ -102,8 +150,12 @@ def cmd_mids(hl: HLRead, args) -> None:
 
 def cmd_book(hl: HLRead, args) -> None:
     b = hl.book(args.coin, depth=args.depth)
-    if args.json:
-        return _emit(b, True)
+    rows = (
+        [{"side": "ask", **lv} for lv in b["asks"]]
+        + [{"side": "bid", **lv} for lv in b["bids"]]
+    )
+    if _emit_data(args, b, rows):
+        return
     _render_book(b)
 
 
@@ -143,8 +195,10 @@ def _render_positions(p: dict) -> None:
 
 
 def cmd_positions(hl: HLRead, args) -> None:
-    if args.json:
-        return _emit(hl.positions(args.address), True)
+    if _fmt(args) != "table":
+        p = hl.positions(args.address)
+        _emit_data(args, p, p["positions"])
+        return
     if not getattr(args, "watch", False):
         _render_positions(hl.positions(args.address))
         return
@@ -171,8 +225,8 @@ def cmd_ledger(hl: HLRead, args) -> None:
     total = len(rows)
     if args.limit:
         rows = rows[: args.limit]
-    if args.json:
-        return _emit(rows, True)
+    if _emit_data(args, rows):
+        return
     if not rows:
         print("  ledger        : none in window")
         return
@@ -187,8 +241,13 @@ def cmd_ledger(hl: HLRead, args) -> None:
 
 def cmd_portfolio(hl: HLRead, args) -> None:
     p = hl.portfolio(args.address)
-    if args.json:
-        return _emit(p, True)
+    prows = [
+        {"period": k, "start_value": v["start_value"], "end_value": v["end_value"],
+         "period_pnl": v["period_pnl"], "vlm": v["vlm"]}
+        for k, v in p["periods"].items()
+    ]
+    if _emit_data(args, p, prows):
+        return
     print(f"  portfolio   {p['address']}")
     if not p["periods"]:
         print("    (no history)")
@@ -207,8 +266,8 @@ def cmd_portfolio(hl: HLRead, args) -> None:
 
 def cmd_balances(hl: HLRead, args) -> None:
     b = hl.spot_balances(args.address)
-    if args.json:
-        return _emit(b, True)
+    if _emit_data(args, b, b["balances"]):
+        return
     print(f"  address : {b['address']}")
     if not b["balances"]:
         print("  balances: none")
@@ -223,8 +282,8 @@ def cmd_spot(hl: HLRead, args) -> None:
     if args.coins:
         wanted = {c.upper() for c in args.coins}
         rows = [r for r in rows if (r["name"] or "").upper() in wanted or (r["base"] or "").upper() in wanted]
-    if args.json:
-        return _emit(rows, True)
+    if _emit_data(args, rows):
+        return
     rows = [r for r in rows if r["mid"] is not None] or rows
     print(f"  {len(rows)} spot markets")
     print(f"    {'pair':<14}{'base':<10}{'quote':<8}{'mid':>16}")
@@ -235,8 +294,8 @@ def cmd_spot(hl: HLRead, args) -> None:
 
 def cmd_orders(hl: HLRead, args) -> None:
     orders = hl.open_orders(args.address)
-    if args.json:
-        return _emit(orders, True)
+    if _emit_data(args, orders):
+        return
     if not orders:
         print("  open orders   : none")
         return
@@ -255,8 +314,8 @@ def cmd_fills(hl: HLRead, args) -> None:
             fills = fills[: args.limit]
     else:
         fills = hl.fills(args.address, limit=args.limit)
-    if args.json:
-        return _emit(fills, True)
+    if _emit_data(args, fills):
+        return
     if not fills:
         print("  fills         : none")
         return
@@ -276,8 +335,8 @@ def cmd_funding(hl: HLRead, args) -> None:
     if args.coins:
         wanted = {c.upper() for c in args.coins}
         rows = [r for r in rows if r["coin"] in wanted]
-    if args.json:
-        return _emit(rows, True)
+    if _emit_data(args, rows):
+        return
     print(f"    {'coin':<8}{'funding%/hr':>14}{'mark':>14}{'oracle':>14}{'OI':>16}")
     for r in rows[: args.top if args.top else len(rows)]:
         fr = r["funding"] * 100
@@ -302,8 +361,14 @@ def cmd_predicted(hl: HLRead, args) -> None:
     if args.coins:
         wanted = {c.upper() for c in args.coins}
         rows = [r for r in rows if (r["coin"] or "").upper() in wanted]
-    if args.json:
-        return _emit(rows, True)
+    flat = [
+        {"coin": r["coin"], "venue": v["venue"], "funding_rate": v["funding_rate"],
+         "funding_interval_hours": v["funding_interval_hours"],
+         "next_funding_time": v["next_funding_time"]}
+        for r in rows for v in r["venues"]
+    ]
+    if _emit_data(args, rows, flat):
+        return
     # Sort by |Hyperliquid predicted funding| so the spiciest markets surface.
     rows.sort(key=lambda r: abs(_hl_venue_rate(r) or 0), reverse=True)
     shown = rows[: args.top] if args.top else rows
@@ -325,8 +390,8 @@ def cmd_predicted(hl: HLRead, args) -> None:
 
 def cmd_markets(hl: HLRead, args) -> None:
     m = hl.markets()
-    if args.json:
-        return _emit(m, True)
+    if _emit_data(args, m):
+        return
     print(f"  {len(m)} perp markets")
     print(f"    {'coin':<10}{'maxLev':>8}{'szDec':>8}{'isolated':>10}")
     for a in m:
@@ -334,6 +399,45 @@ def cmd_markets(hl: HLRead, args) -> None:
             f"    {a['name']:<10}{str(a['max_leverage']):>8}"
             f"{str(a['sz_decimals']):>8}{str(a['only_isolated']):>10}"
         )
+
+
+def cmd_export(hl: HLRead, args) -> None:
+    """Fetch fills/ledger/candles and write them to a UTF-8 file (csv default).
+
+    A direct file writer (vs shell redirect) so output is always UTF-8 - the
+    Windows/PowerShell ``>`` redirect defaults to UTF-16 and corrupts CSVs.
+    """
+    fmt = _fmt(args)
+    if fmt == "table":
+        fmt = "csv"  # export defaults to csv; --format json/ndjson to change
+    if args.what == "fills":
+        if args.since:
+            rows = hl.fills_by_time(
+                args.target, _parse_when(args.since), _parse_when(args.until) if args.until else None
+            )
+        else:
+            rows = hl.fills(args.target, limit=0)
+        rows = sorted(rows, key=lambda r: r.get("time", 0) or 0, reverse=True)
+    elif args.what == "ledger":
+        rows = hl.ledger(
+            args.target,
+            _parse_when(args.since) if args.since else 0,
+            _parse_when(args.until) if args.until else None,
+        )
+        rows = sorted(rows, key=lambda r: r.get("time") or 0, reverse=True)
+    else:  # candles
+        rows = hl.candles(args.target, interval=args.interval, hours=args.hours)
+    if args.limit:
+        rows = rows[: args.limit]
+    with open(args.out, "w", encoding="utf-8", newline="") as fh:
+        if fmt == "json":
+            json.dump(rows, fh, indent=2, ensure_ascii=False)
+        elif fmt == "ndjson":
+            for r in rows:
+                fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+        else:
+            _write_csv(rows, fh)
+    print(f"wrote {len(rows)} {args.what} rows to {args.out} ({fmt})")
 
 
 def cmd_watch(hl: HLRead, args) -> None:
@@ -376,7 +480,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="hl-read", description="Read-only Hyperliquid data. No keys, ever.")
     p.add_argument("--version", action="version", version=f"hl-read {__version__}")
     p.add_argument("--testnet", action="store_true", help="use the testnet API")
-    p.add_argument("--json", action="store_true", help="emit raw JSON")
+    p.add_argument("--json", action="store_true", help="emit raw JSON (alias for --format json)")
+    p.add_argument("--format", choices=["table", "json", "csv", "ndjson"], default="table",
+                   help="output format (default table; csv/ndjson for list data)")
     p.add_argument("--retries", type=int, default=4, help="retry attempts on transient errors")
     p.add_argument("--rate-limit", type=float, default=None, dest="rate_limit",
                    help="cap HTTP calls to at most N per minute")
@@ -446,6 +552,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("coin")
     sp.add_argument("--depth", type=int, default=10)
     sp.set_defaults(func=cmd_watch)
+
+    sp = sub.add_parser("export", help="write fills/ledger/candles to a UTF-8 file (csv default)")
+    sp.add_argument("what", choices=["fills", "ledger", "candles"])
+    sp.add_argument("target", help="address (fills/ledger) or coin (candles)")
+    sp.add_argument("--out", required=True, help="output file path")
+    sp.add_argument("--since", help="window start: 24h/7d (ago), 2024-01-31, or epoch ms")
+    sp.add_argument("--until", help="window end (default now)")
+    sp.add_argument("--limit", type=int, default=0, help="cap rows (0 = all)")
+    sp.add_argument("--interval", default="1h", help="candles interval (e.g. 1m/1h/1d)")
+    sp.add_argument("--hours", type=float, default=168, help="candles lookback hours")
+    sp.set_defaults(func=cmd_export)
 
     return p
 

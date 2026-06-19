@@ -37,10 +37,21 @@ hl-read fills 0xYourAddr... --since 7d     # fills within a time window (e.g. 24
 hl-read watch ETH                  # live order book over websocket
 ```
 
-Global flags: `--testnet` (use the testnet API), `--json` (raw JSON, great for piping to `jq`), `--retries N` (retry transient failures), `--rate-limit N` (cap HTTP calls/min), `--no-cache` (always fetch fresh).
+Global flags: `--testnet` (use the testnet API), `--json` (raw JSON, great for piping to `jq`), `--format table|json|csv|ndjson` (output format; `--json` is the alias for `--format json`), `--retries N` (retry transient failures), `--rate-limit N` (cap HTTP calls/min), `--no-cache` (always fetch fresh).
 
 ```bash
 hl-read --json funding | jq '.[] | select(.funding > 0.0001)'
+hl-read --format csv funding > funding.csv          # any list command as CSV / NDJSON
+```
+
+### Export to a file
+
+`export` writes straight to a UTF-8 file (no BOM) so it survives the Windows/PowerShell `>` redirect, which otherwise emits UTF-16 and corrupts CSVs. Defaults to CSV; use `--format json|ndjson` to change.
+
+```bash
+hl-read export ledger 0xYourAddr... --out ledger.csv         # full deposit/withdrawal history
+hl-read export fills  0xYourAddr... --since 30d --out fills.csv
+hl-read --format ndjson export candles BTC --hours 168 --out btc.ndjson
 ```
 
 ## Library

@@ -34,7 +34,7 @@
 - [x] **2. portfolio(addr)** — アカウント価値/PnL時系列(day/week/month/all)。lib + CLI `portfolio <addr>` + MCP `get_portfolio` + test + 検証 + commit/push ✅
 - [x] **3. fills_by_time(addr, since, until)** — 期間指定約定。lib + CLI `fills` に `--since/--until` + MCP `get_fills_by_time` + test + 検証 + commit/push ✅
 - [x] **4. ledger(addr)** — 入出金/送金履歴(non-funding ledger)。lib + CLI `ledger <addr>` + MCP `get_ledger` + test + 検証 + commit/push ✅
-- [ ] **5. 出力形式** — 全CLIに `--format table|json|csv|ndjson` ＋ `export` サブコマンド（fills/ledger/candles→ファイル）+ test + commit/push
+- [x] **5. 出力形式** — 全CLIに `--format table|json|csv|ndjson` ＋ `export` サブコマンド（fills/ledger/candles→ファイル）+ test + commit/push ✅
 - [ ] **6. wrap-up** — version 0.3.0 / README のMCPツール数・機能一覧更新 / 全テスト緑の最終確認 / memory(hl-read-toolkit.md) 更新 / 最終 commit/push → **ループ停止**
 
 （任意の拡張候補＝今回は対象外。必要なら後続: order_history / fees / staking / vault_equities / sub_accounts / explorer API）
@@ -46,3 +46,4 @@
 - 反復2 ✅ portfolio: lib/CLI(`portfolio`)/MCP(get_portfolio→計13ツール)/test(18/18緑)。ライブ確認=クジラ全8期間PnL(allTime +$4.48M)。不変条件grep OK。
 - 反復3 ✅ fills_by_time: lib + CLI(`fills --since/--until`、時刻パーサ24h/7d/ISO/ms)/MCP(get_fills_by_time→計14ツール)/test(20/20緑)。ライブ確認=30日窓・新しい順表示。不変条件grep OK。
 - 反復4 ✅ ledger: lib(usdc抽出+raw delta保持) + CLI(`ledger --since/--until/--limit`、--limit 0=全件)/MCP(get_ledger→計15ツール)/test(21/21緑)。ライブ確認=2000件・新しい順。不変条件grep OK。hl-tax-jpの土台完成。
+- 反復5 ✅ 出力形式: 全listコマンドに`--format table/json/csv/ndjson`統一(_emit_data、--jsonは後方互換alias)+`export`サブコマンド(fills/ledger/candles→UTF-8ファイル・BOM無し=Win redirect回避)。tests/test_cli.py新規(計36緑)。ライブ=csv funding/ndjson mids/export ledger・candles検証、--json不変確認。不変条件grep OK。
